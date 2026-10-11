@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "bun --bun next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:wasm": "GOOS=js GOARCH=wasm /home/linuxbrew/.linuxbrew/bin/go build -ldflags=\"-s -w\" -o public/wasm/media.wasm wasm/media/main.go"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

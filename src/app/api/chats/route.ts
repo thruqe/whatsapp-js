@@ -40,6 +40,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Missing jid" }, { status: 400 });
     }
 
+    if (action === "subscribe_presence") {
+      await whatsappManager.subscribePresence(jid);
+      return NextResponse.json({ success: true });
+    }
+
     if (action === "leave") {
       await whatsappManager.leaveGroup(jid);
       return NextResponse.json({ success: true, message: "Left group successfully" });

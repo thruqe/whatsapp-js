@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
       const onMessage = (data: unknown) => sendEvent("message", data);
       const onChats = (data: unknown) => sendEvent("chats", data);
       const onStatus = (data: unknown) => sendEvent("status", data);
+      const onPresence = (data: unknown) => sendEvent("presence", data);
 
       eventBus.on("qr", onQr);
       eventBus.on("qr_cleared", onQrCleared);
@@ -49,6 +50,7 @@ export async function GET(req: NextRequest) {
       eventBus.on("message", onMessage);
       eventBus.on("chats", onChats);
       eventBus.on("status", onStatus);
+      eventBus.on("presence", onPresence);
 
       // Heartbeat interval to keep connection alive
       const heartbeat = setInterval(() => {
@@ -68,6 +70,7 @@ export async function GET(req: NextRequest) {
         eventBus.off("message", onMessage);
         eventBus.off("chats", onChats);
         eventBus.off("status", onStatus);
+        eventBus.off("presence", onPresence);
         try {
           controller.close();
         } catch {

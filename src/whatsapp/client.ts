@@ -56,7 +56,7 @@ export class WhatsAppClientManager {
     );
 
     this.setupListeners(this.client);
-    void this.loadDatabaseHistory();
+    void this.loadDatabaseHistory().then(() => this.syncGroups());
     return this.client;
   }
 
@@ -88,8 +88,7 @@ export class WhatsAppClientManager {
       eventBus.clearQr();
       eventBus.setState("open", this.meJid ?? undefined);
       console.log(`[whatsapp] Paired successfully as: ${this.meJid}`);
-      void this.loadDatabaseHistory();
-      void this.syncGroups();
+      void this.loadDatabaseHistory().then(() => this.syncGroups());
       if (this.meJid) {
         void this.fetchProfilePicture(this.meJid).then((url) => {
           this.myAvatarUrl = url;
@@ -102,8 +101,7 @@ export class WhatsAppClientManager {
       if (event.status === "open") {
         eventBus.clearQr();
         eventBus.setState("open", this.meJid ?? undefined);
-        void this.loadDatabaseHistory();
-        void this.syncGroups();
+        void this.loadDatabaseHistory().then(() => this.syncGroups());
         if (this.meJid) {
           void this.fetchProfilePicture(this.meJid).then((url) => {
             this.myAvatarUrl = url;
@@ -159,6 +157,20 @@ export class WhatsAppClientManager {
           replyTo,
         };
         eventBus.pushMessage(msg);
+      }
+    });
+
+    client.on("presence" as any, (event: any) => {
+      const fromJid = event.from || event.jid || event.id;
+      if (fromJid) {
+        eventBus.setPresence(fromJid, event.type || "unavailable", event.lastSeen);
+      }
+    });
+
+    client.on("chatstate" as any, (event: any) => {
+      const fromJid = event.from || event.jid || event.id;
+      if (fromJid) {
+        eventBus.setPresence(fromJid, event.chatstate || event.type || "composing");
       }
     });
   }
@@ -400,13 +412,33 @@ export class WhatsAppClientManager {
             };
           });
 
+          // Check if group already has messages in memory or database
+          const existingChat = eventBus.getChat(groupJid);
+          const existingMsgs = eventBus.getMessages(groupJid);
+          const latestMsg =
+            existingMsgs && existingMsgs.length > 0 ? existingMsgs[existingMsgs.length - 1] : null;
+
+          const groupLastMessage =
+            latestMsg?.text ||
+            (existingChat?.lastMessage && existingChat.lastMessage !== "Group joined"
+              ? existingChat.lastMessage
+              : desc
+              ? desc.slice(0, 80)
+              : "No messages yet");
+
+          const groupLastTimestamp =
+            latestMsg?.timestamp ||
+            (existingChat?.lastTimestamp && existingChat.lastTimestamp > creationTimestamp
+              ? existingChat.lastTimestamp
+              : creationTimestamp);
+
           eventBus.upsertChat({
             jid: groupJid,
             name: subject,
             isGroup: true,
-            lastMessage: desc ? desc.slice(0, 80) : "Group joined",
-            lastTimestamp: creationTimestamp,
-            unreadCount: 0,
+            lastMessage: groupLastMessage,
+            lastTimestamp: groupLastTimestamp,
+            unreadCount: existingChat?.unreadCount ?? 0,
             desc,
             participantsCount,
             participants: cleanParticipants,
@@ -557,6 +589,20 @@ export class WhatsAppClientManager {
       await this.client.privacy.unblockUser(jid);
     }
     eventBus.setChatBlocked(jid, false);
+  }
+
+  /**
+   * Subscribes to peer presence events (online/offline, typing, recording).
+   */
+  public async subscribePresence(jid: string): Promise<void> {
+    if (this.client && eventBus.getState().state === "open") {
+      try {
+        const cleanJid = jid.includes(":") ? `${jid.split(":")[0]}@${jid.split("@")[1]}` : jid;
+        await this.client.presence.subscribe(cleanJid);
+      } catch {
+        // Ignored
+      }
+    }
   }
 
   /**

@@ -129,15 +129,54 @@ class WhatsAppEventBus extends EventEmitter {
     };
   }
 
+  // Presence map indexed by JID
+  private readonly presences = new Map<string, { type?: string; lastSeen?: number }>();
+
+  public setPresence(jid: string, type: string, lastSeen?: number): void {
+    if (!jid) return;
+    this.presences.set(jid, { type, lastSeen });
+    this.emit("presence", { jid, type, lastSeen });
+  }
+
+  public getPresence(jid: string): { type?: string; lastSeen?: number } | undefined {
+    return this.presences.get(jid);
+  }
+
+  public getChat(jid: string): ChatThread | undefined {
+    return this.chatsMap.get(jid);
+  }
+
   public upsertChat(chat: ChatThread): void {
     if (!chat || !chat.jid) return;
 
     const existing = this.chatsMap.get(chat.jid);
+    const existingMsgs = this.messagesByChat.get(chat.jid);
+    const latestMsg =
+      existingMsgs && existingMsgs.length > 0 ? existingMsgs[existingMsgs.length - 1] : null;
+
+    let finalLastMessage = chat.lastMessage;
+    let finalLastTimestamp = chat.lastTimestamp;
+
+    if (latestMsg && latestMsg.text) {
+      finalLastMessage = latestMsg.text;
+      finalLastTimestamp = latestMsg.timestamp;
+    } else if (
+      existing &&
+      existing.lastMessage &&
+      existing.lastMessage !== "Group joined" &&
+      (!chat.lastMessage || chat.lastMessage === "Group joined")
+    ) {
+      finalLastMessage = existing.lastMessage;
+      finalLastTimestamp = existing.lastTimestamp;
+    }
+
     if (existing) {
       this.chatsMap.set(chat.jid, {
         ...existing,
         ...chat,
         name: chat.name || existing.name,
+        lastMessage: finalLastMessage || existing.lastMessage || "",
+        lastTimestamp: Math.max(finalLastTimestamp || 0, existing.lastTimestamp || 0),
         desc: chat.desc ?? existing.desc,
         participantsCount: chat.participantsCount ?? existing.participantsCount,
         participants: chat.participants ?? existing.participants,
@@ -153,6 +192,8 @@ class WhatsAppEventBus extends EventEmitter {
     } else {
       this.chatsMap.set(chat.jid, {
         ...chat,
+        lastMessage: finalLastMessage || "",
+        lastTimestamp: finalLastTimestamp || Date.now(),
         isBlocked: this.blockedJids.has(chat.jid),
       });
     }

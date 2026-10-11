@@ -191,6 +191,30 @@ function formatDurationWasm(sec?: number): string {
   return `${m}:${s < 10 ? "0" : ""}${s}`;
 }
 
+function formatFileSizeWasm(bytes?: number): string {
+  if (!bytes) return "0 B";
+  if (typeof window !== "undefined" && (window as any).__wasmFormatFileSize) {
+    try {
+      return (window as any).__wasmFormatFileSize(bytes);
+    } catch {
+      // fallback
+    }
+  }
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+function cleanPhoneWasm(phone?: string): string {
+  if (!phone) return "~";
+  if (typeof window !== "undefined" && (window as any).__wasmCleanPhone) {
+    try {
+      return (window as any).__wasmCleanPhone(phone);
+    } catch {
+      // fallback
+    }
+  }
+  return phone;
+}
+
 function formatChatTime(ts: number): string {
   if (!ts) return "";
   const date = new Date(ts);
@@ -590,7 +614,7 @@ const ChatBubble = memo(function ChatBubble({
                 {msg.media.fileName || "Document"}
               </p>
               <span className="text-[10px] text-slate-500">
-                {msg.media.fileSize ? `${Math.round(msg.media.fileSize / 1024)} KB` : "Document file"}
+                {msg.media.fileSize ? formatFileSizeWasm(msg.media.fileSize) : "Document file"}
               </span>
             </div>
             <a
@@ -673,6 +697,7 @@ export default function WhatsAppWebPage() {
   const [statuses, setStatuses] = useState<StatusBroadcast[]>([]);
   const [activeStatus, setActiveStatus] = useState<StatusBroadcast | null>(null);
   const [previewMedia, setPreviewMedia] = useState<MediaMessageInfo | null>(null);
+  const [presences, setPresences] = useState<Record<string, { type?: string; lastSeen?: number }>>({});
 
   // Drawer for Group Info / Chat Settings
   const [showChatInfoDrawer, setShowChatInfoDrawer] = useState(false);
@@ -855,6 +880,20 @@ export default function WhatsAppWebPage() {
         }
       });
 
+      es.addEventListener("presence", (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.jid) {
+            setPresences((prev) => ({
+              ...prev,
+              [data.jid]: { type: data.type, lastSeen: data.lastSeen },
+            }));
+          }
+        } catch (e) {
+          console.error("Error parsing presence event:", e);
+        }
+      });
+
       es.onerror = () => {
         es?.close();
         setTimeout(connectSSE, 3000);
@@ -884,6 +923,12 @@ export default function WhatsAppWebPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "mark_read", jid: activeChat.jid }),
+      }).catch(() => undefined);
+
+      fetch("/api/chats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "subscribe_presence", jid: activeChat.jid }),
       }).catch(() => undefined);
     }
   }, [activeChat?.jid]);
@@ -1332,7 +1377,13 @@ export default function WhatsAppWebPage() {
               <span className="text-sm font-semibold text-slate-800 leading-tight truncate">
                 {displayName}
               </span>
-              <span className="text-[11px] text-[#3390ec] font-medium">Online</span>
+              <span className="text-[11px] text-[#3390ec] font-medium">
+                {connectionState === "open"
+                  ? "Connected"
+                  : connectionState === "connecting"
+                  ? "Connecting..."
+                  : "Disconnected"}
+              </span>
             </div>
           </div>
 
@@ -1635,7 +1686,17 @@ export default function WhatsAppWebPage() {
                         : "Group conversation • click for group info"
                       : activeChat.isBlocked
                       ? "Blocked contact"
-                      : "online • click for info"}
+                      : presences[activeChat.jid]?.type === "composing"
+                      ? "typing..."
+                      : presences[activeChat.jid]?.type === "recording"
+                      ? "recording audio..."
+                      : presences[activeChat.jid]?.type === "available"
+                      ? "online"
+                      : presences[activeChat.jid]?.lastSeen
+                      ? `last seen ${formatChatTime(presences[activeChat.jid].lastSeen!)}`
+                      : activeChat.name !== activeChat.jid.split("@")[0]
+                      ? cleanPhoneWasm(activeChat.jid.split("@")[0])
+                      : "click for contact info"}
                   </span>
                 </div>
               </div>
