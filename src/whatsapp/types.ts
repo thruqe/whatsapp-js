@@ -1,5 +1,5 @@
 /**
- * WhatsApp state and event types for the zapo-js integration layer.
+ * WhatsApp state, chat thread, and message types for WhatsApp Web.
  */
 
 export type ConnectionState = "disconnected" | "connecting" | "open" | "close";
@@ -10,6 +10,8 @@ export interface SessionInfo {
   meJid?: string;
   phone?: string;
   pushName?: string;
+  name?: string;
+  avatarUrl?: string;
   platform?: string;
   uptimeSeconds: number;
 }
@@ -27,15 +29,80 @@ export interface PairingCodeData {
   generatedAt: number;
 }
 
-export interface LiveMessageEvent {
+export interface GroupParticipant {
+  jid: string;
+  name?: string;
+  phoneNumber?: string;
+  type?: "admin" | "superadmin" | "member";
+  isSuperAdmin?: boolean;
+  isAdmin?: boolean;
+}
+
+export interface QuotedMessageInfo {
+  id?: string;
+  senderJid?: string;
+  senderName?: string;
+  text?: string;
+  mediaType?: "image" | "video" | "audio" | "document" | "sticker";
+}
+
+export interface MediaMessageInfo {
+  type: "image" | "video" | "audio" | "document" | "sticker";
+  mimetype?: string;
+  caption?: string;
+  thumbnailBase64?: string;
+  fileName?: string;
+  fileSize?: number;
+  seconds?: number;
+  isVoiceNote?: boolean;
+  isAnimated?: boolean;
+  messageId?: string;
+}
+
+export interface StatusBroadcast {
   id: string;
-  remoteJid: string;
-  sender: string;
+  senderJid: string;
+  senderName: string;
+  text?: string;
+  timestamp: number;
+  media?: MediaMessageInfo;
+}
+
+export interface ChatThread {
+  jid: string;
+  name: string;
+  isGroup: boolean;
+  isStatusBroadcast?: boolean;
+  isNewsletter?: boolean;
+  lastMessage: string;
+  lastTimestamp: number;
+  unreadCount: number;
+  desc?: string;
+  participantsCount?: number;
+  participants?: GroupParticipant[];
+  owner?: string;
+  creation?: number;
+  restrict?: boolean;
+  announce?: boolean;
+  avatarUrl?: string;
+  isPinned?: boolean;
+  isArchived?: boolean;
+  isBlocked?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  chatJid: string;
+  senderJid: string;
+  senderName: string;
   fromMe: boolean;
   text: string;
   timestamp: number;
   isGroup: boolean;
-  pushName?: string;
+  isStatusBroadcast?: boolean;
+  media?: MediaMessageInfo;
+  replyTo?: QuotedMessageInfo;
+  reaction?: string;
 }
 
 export interface SendMessagePayload {

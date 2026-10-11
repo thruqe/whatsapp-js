@@ -13,9 +13,8 @@ For Next.js 16 conventions and App Router rules, consult the local versioned doc
 ## Key Commands
 
 - `bun install`: Install dependencies
-- `bun run dev`: Start Next.js fullstack dev server (Web UI + API + WhatsApp client)
-- `bun run bot`: Run headless CLI WhatsApp bot with terminal QR
-- `bun run build`: Build Next.js application
+- `bun run dev`: Start Next.js development server (WhatsApp Web UI + API)
+- `bun run build`: Build Next.js application for production
+- `bun run start`: Start production server
 - `bun run typecheck`: Run TypeScript compiler checks (`tsc --noEmit`)
 - `bun run lint`: Run ESLint validation
-- `task <command>`: Task automation via [`Taskfile.yml`](./Taskfile.yml)

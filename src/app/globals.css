@@ -1,84 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Fira+Code:wght@400;500&display=swap');
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f0f2f5;
+  --foreground: #1c2733;
+  --primary-blue: #3390ec;
+  --primary-blue-hover: #267fd9;
+  --tg-bubble-out: #eef6ff;
+  --tg-bubble-in: #ffffff;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-/* Flat color tokens for the login and splash screens */
-.login-theme {
-  --paper: #f5f4ef;
-  --card: #ffffff;
-  --ink: #111311;
-  --muted: #6b6f6a;
-  --line: #dcdcd4;
-  --accent: #3ddc84;
-  --danger: #d92d20;
-}
-
-@media (prefers-color-scheme: dark) {
-  .login-theme {
-    --paper: #0d0f0e;
-    --card: #151816;
-    --ink: #ecede8;
-    --muted: #8b908a;
-    --line: #2a2e2b;
-    --danger: #f97066;
-  }
-}
-
-@theme {
-  --animate-qr-ttl: qr-ttl linear forwards;
-  --animate-splash: splash-progress 1.4s ease-in-out infinite;
-  --animate-fade-up: fade-up 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  --animate-code-in: fade-up 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-
-  @keyframes qr-ttl {
-    from {
-      transform: scaleX(1);
-    }
-    to {
-      transform: scaleX(0);
-    }
-  }
-
-  @keyframes splash-progress {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(250%);
-    }
-  }
-
-  @keyframes fade-up {
-    from {
-      opacity: 0;
-      transform: translateY(8px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: 'Fira Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'Fira Code', monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: #eef2f5;
+  color: #1c2733;
+}
+
+/* Telegram / WhatsApp Authentic Visible Doodle Wallpaper Pattern */
+.doodle-bg {
+  background-color: #e2ecf5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260' viewBox='0 0 260 260'%3E%3Cg fill='none' stroke='%232a76c7' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round' opacity='0.24'%3E%3C!-- Chat Bubble 1 --%3E%3Cpath d='M30 35 h35 a10 10 0 0 1 10 10 v18 a10 10 0 0 1 -10 10 h-22 l-9 8 v-8 h-4 a10 10 0 0 1 -10 -10 v-18 a10 10 0 0 1 10 -10 z' /%3E%3Ccircle cx='46' cy='54' r='2' fill='%232a76c7' /%3E%3Ccircle cx='54' cy='54' r='2' fill='%232a76c7' /%3E%3Ccircle cx='62' cy='54' r='2' fill='%232a76c7' /%3E%3C!-- Paper Plane --%3E%3Cpath d='M160 30 l42 16 -18 36 -6 -16 -18 -6 z' /%3E%3Cpath d='M178 66 l-2 -18 18 -12' /%3E%3C!-- Heart --%3E%3Cpath d='M115 48 c-4 -6 -12 -6 -16 0 -4 6 0 12 16 22 16 -10 20 -16 16 -22 -4 -6 -12 -6 -16 0 z' /%3E%3C!-- Coffee Mug --%3E%3Cpath d='M215 130 h16 a6 6 0 0 1 0 12 h-16 v18 a8 8 0 0 1 -8 8 h-18 a8 8 0 0 1 -8 -8 v-30 h34 z' /%3E%3Cpath d='M188 122 c2 -3 4 -3 6 0' /%3E%3Cpath d='M196 122 c2 -3 4 -3 6 0' /%3E%3C!-- Star --%3E%3Cpath d='M45 140 l3 7 8 1 -6 5 2 8 -7 -4 -7 4 2 -8 -6 -5 8 -1 z' /%3E%3C!-- Music Note --%3E%3Cpath d='M120 135 v25 a5 5 0 1 1 -4 -4 h4 v-21 h16 v18 a5 5 0 1 1 -4 -4 h4 v-14 z' /%3E%3C!-- Headphone --%3E%3Cpath d='M75 220 v-12 a18 18 0 0 1 36 0 v12' /%3E%3Crect x='70' y='216' width='8' height='14' rx='4' /%3E%3Crect x='108' y='216' width='8' height='14' rx='4' /%3E%3C!-- Clock --%3E%3Ccircle cx='180' cy='210' r='16' /%3E%3Cpath d='M180 198 v12 l8 5' /%3E%3C!-- Thumbs Up --%3E%3Cpath d='M30 205 h8 v20 h-8 z m8 12 h14 a4 4 0 0 0 4 -4 v-6 a4 4 0 0 0 -4 -4 h-8 l2 -8 a4 4 0 0 0 -4 -4 l-4 6 v10' /%3E%3C!-- Sparkles / Dots --%3E%3Ccircle cx='145' cy='95' r='2.5' fill='%232a76c7' /%3E%3Ccircle cx='235' cy='60' r='2' fill='%232a76c7' /%3E%3Ccircle cx='20' cy='105' r='2' fill='%232a76c7' /%3E%3Ccircle cx='240' cy='220' r='2.5' fill='%232a76c7' /%3E%3Ccircle cx='130' cy='190' r='2' fill='%232a76c7' /%3E%3C/g%3E%3C/svg%3E");
+  background-size: 260px 260px;
+}
+
+/* Telegram-like custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 160, 180, 0.45);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 160, 180, 0.75);
 }

@@ -5,8 +5,8 @@
 <h1 align="center">WhatsRook JS</h1>
 
 <p align="center">
-  <strong>High-performance, lightweight WhatsApp automation bot and control center.</strong><br />
-  Engineered with Bun, TypeScript, Next.js (App Router), and <a href="https://github.com/vinikjkkj/zapo">zapo-js</a>.
+  <strong>High-performance, modern WhatsApp Web platform and interface.</strong><br />
+  Built with Bun, TypeScript, Next.js 16 (App Router), and <a href="https://github.com/vinikjkkj/zapo">zapo-js</a>.
 </p>
 
 <p align="center">
@@ -21,9 +21,22 @@
 
 ## Overview
 
-**WhatsRook JS** is an automation bot and real-time management dashboard that integrates with your WhatsApp linked devices. Built for zero-copy hot paths, low memory consumption, and high concurrency on the Bun runtime.
+**WhatsRook JS** is a high-performance WhatsApp Web web application matching the real WhatsApp Web user experience. Built with Bun and the zero-copy, memory-efficient [`zapo-js`](https://github.com/vinikjkkj/zapo) library.
 
-It features both a **Next.js Fullstack Dashboard** with real-time Server-Sent Events (SSE) and an autonomous **Headless Terminal Bot CLI** with ANSI QR rendering.
+### Key Capabilities
+
+1. **Authentication Experience**:
+   - Matching WhatsApp Web pairing screen.
+   - Live high-resolution QR Code scanning with auto-refresh via Server-Sent Events (SSE).
+   - Link with Phone Number (8-digit code pairing).
+2. **Conversations & Chat Workspace**:
+   - **Sidebar**: Complete chats list with avatars, names, last message preview, unread badges, search filter, and category pills (All, Unread, Groups).
+   - **Enter / Leave Chat**: Select any conversation to view real-time chat history. Close active chat or exit back to the overview.
+   - **Group Management**: Automatic group synchronization and native **Leave Group** capability.
+   - **Messaging**: Real-time incoming & outgoing messages with WhatsApp dark theme chat bubbles, timestamps, and delivery indicators.
+   - **Start New Chat**: Quickly start conversations with any phone number or group JID.
+
+---
 
 ## Quick Start
 
@@ -35,7 +48,7 @@ bun install
 
 ### 2. Configuration
 
-Create your local `.env` from the provided template:
+Create your `.env` file:
 
 ```bash
 cp .env.example .env
@@ -45,88 +58,55 @@ cp .env.example .env
 | :------------- | :------------------------------------------------------- | :--------- |
 | `SESSION_ID`   | Unique identifier for SQLite session storage             | `default`  |
 | `AUTH_DIR`     | Storage directory for authentication state               | `.auth`    |
-| `BOT_PREFIX`   | Command prefix trigger                                   | `!`        |
-| `BOT_NAME`     | Name of the bot instance                                 | `WhatsRook`|
-| `OWNER_NUMBER` | Whitelisted owner phone number (e.g. `2348012345678`)    | (empty)    |
 | `PORT`         | Port for Next.js web application                         | `3000`     |
 
 ### 3. Running
 
-#### Option A: Fullstack Web Dashboard & WhatsApp Bot
-
 ```bash
 bun run dev
-# or: task dev
 ```
 
-Open `http://localhost:3000` to access the live dashboard, scan your QR code or generate an 8-digit phone pairing code, monitor incoming messages in real-time, and execute commands.
+Navigate to `http://localhost:3000` in your browser.
 
-#### Option B: Standalone Headless CLI Bot
+---
+
+## Development Scripts
+
+Managed directly via Bun:
 
 ```bash
-bun run bot
-# or: task bot
-```
-
-Renders an ANSI QR code directly in your terminal for immediate pairing.
-
----
-
-## Features
-
-- **Protocol Engine**: Built strictly on [`zapo-js`](https://github.com/vinikjkkj/zapo) with `@zapo-js/store-sqlite` for secure, persistent authentication state.
-- **Fluent Message Builder**: Chainable `TextBuilder` formatting API (`Bold`, `Italic`, `Code`, `CodeBlock`, `Quote`, `Divider`).
-- **Command Dispatcher**: Synchronized in-memory command registry supporting aliases, permission scopes (owner, public), and chat filters (group only).
-- **Interactive Web Dashboard**:
-  - Live QR code pairing with automatic SSE stream updates.
-  - Link with Phone Number (8-digit pairing code).
-  - Real-time incoming & outgoing chat console with live streaming.
-  - Interactive message composer with WhatsApp markdown helpers.
-  - Bot command palette and execution test bench.
-- **Server Instrumentation**: Next.js server lifecycle integration via `src/instrumentation.ts`.
-- **Low Memory & Low CPU**: Zero bloated runtime wrappers; uses native Bun primitives.
-
----
-
-## Bot Commands
-
-| Command      | Aliases               | Category  | Access | Description                                           |
-| :----------- | :-------------------- | :-------- | :----- | :---------------------------------------------------- |
-| `!ping`      | `!p`, `!pong`         | General   | Public | Measure round-trip execution latency and status       |
-| `!info`      | `!status`, `!system`  | General   | Public | View memory footprint, Bun version, and engine info  |
-| `!help`      | `!menu`, `!commands`  | General   | Public | Display full command list and syntax                  |
-| `!echo`      | `!say`                | Tools     | Public | Echo text back to chat                                |
-| `!base64`    | `!b64`                | Tools     | Public | Base64 encoder and decoder                            |
-| `!poll`      | -                     | Tools     | Public | Create interactive WhatsApp poll                      |
-| `!ai`        | `!ask`, `!gpt`        | AI        | Public | Intelligent conversational assistant                  |
-| `!tagall`    | `!everyone`, `!all`   | Group     | Group  | Mention all group chat participants                  |
-| `!groupinfo` | `!ginfo`              | Group     | Group  | View group chat identifiers                           |
-| `!eval`      | -                     | Owner     | Owner  | Evaluate JavaScript expressions at runtime            |
-| `!broadcast` | `!bc`                 | Owner     | Owner  | Broadcast announcements to chats                      |
-
----
-
-## Development & Automation
-
-Managed via [Taskfile.yml](./Taskfile.yml):
-
-```bash
-task install   # Install dependencies
-task dev       # Run Next.js dashboard
-task bot       # Run CLI bot
-task typecheck # TypeScript static type checking
-task lint      # Run ESLint
-task build     # Compile Next.js production build
-task clean     # Clean cache and build artifacts
+bun install         # Install dependencies
+bun run dev         # Run Next.js WhatsApp Web dev server
+bun run typecheck   # TypeScript static type checking
+bun run lint        # Run ESLint
+bun run build       # Compile Next.js production build
 ```
 
 ---
 
-## Contributions
+## Project Structure
 
-Contributions are welcome! Please read the [Contributing Guidelines](./docs/CONTRIBUTING.md).
-
-If you are using an AI agent for development, consult the [AGENTS Documentation](./AGENTS.md) and [CLAUDE Guidelines](./CLAUDE.md).
+```text
+whatsapp-js/
+├── src/
+│   ├── app/                 # Next.js App Router (WhatsApp Web Dashboard & API)
+│   │   ├── api/             # API Route Handlers
+│   │   │   ├── auth/        # QR, pairing code, status, logout
+│   │   │   ├── chats/       # Chat threads, group actions (leave)
+│   │   │   ├── events/      # Server-Sent Events (SSE) real-time streaming
+│   │   │   └── messages/    # Message retrieval & sending
+│   │   ├── layout.tsx       # Root layout
+│   │   └── page.tsx         # Complete WhatsApp Web Auth & Chat interface
+│   ├── whatsapp/            # zapo-js connection & state layer
+│   │   ├── client.ts        # WhatsApp client coordinator (zapo-js)
+│   │   ├── store.ts         # Persistent SQLite store setup
+│   │   ├── events.ts        # Typed event bus and thread storage
+│   │   ├── helpers.ts       # JID & text parsing utilities
+│   │   └── types.ts         # Session, chat, and message types
+│   └── instrumentation.ts   # Next.js server startup hook
+├── docs/                    # Onboarding & developer guides
+└── README.md                # Project documentation
+```
 
 ---
 
@@ -134,7 +114,7 @@ If you are using an AI agent for development, consult the [AGENTS Documentation]
 
 Special thanks to:
 - [`vinikjkkj/zapo`](https://github.com/vinikjkkj/zapo) – The high-performance WhatsApp Web protocol TypeScript library.
-- [`whatsrook`](https://github.com/thruqe/whatsapp-go) – The Go automation architecture inspiration.
+- [`whatsrook`](https://github.com/thruqe/whatsapp-go) – Architecture and engineering foundation.
 
 ---
 

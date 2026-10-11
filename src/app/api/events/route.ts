@@ -20,13 +20,17 @@ export async function GET(req: NextRequest) {
       const status = whatsappManager.getStatus();
       const qr = eventBus.getQr();
       const pairingCode = eventBus.getPairingCode();
+      const chats = eventBus.getChats();
       const messages = eventBus.getMessages();
+      const statuses = eventBus.getStatuses();
 
       sendEvent("init", {
         status,
         qr,
         pairingCode,
-        messages: messages.slice(0, 20),
+        chats,
+        messages,
+        statuses,
       });
 
       // Event listeners
@@ -35,12 +39,16 @@ export async function GET(req: NextRequest) {
       const onPairingCode = (data: unknown) => sendEvent("pairing_code", data);
       const onState = (data: unknown) => sendEvent("state", data);
       const onMessage = (data: unknown) => sendEvent("message", data);
+      const onChats = (data: unknown) => sendEvent("chats", data);
+      const onStatus = (data: unknown) => sendEvent("status", data);
 
       eventBus.on("qr", onQr);
       eventBus.on("qr_cleared", onQrCleared);
       eventBus.on("pairing_code", onPairingCode);
       eventBus.on("state", onState);
       eventBus.on("message", onMessage);
+      eventBus.on("chats", onChats);
+      eventBus.on("status", onStatus);
 
       // Heartbeat interval to keep connection alive
       const heartbeat = setInterval(() => {
@@ -58,6 +66,8 @@ export async function GET(req: NextRequest) {
         eventBus.off("pairing_code", onPairingCode);
         eventBus.off("state", onState);
         eventBus.off("message", onMessage);
+        eventBus.off("chats", onChats);
+        eventBus.off("status", onStatus);
         try {
           controller.close();
         } catch {

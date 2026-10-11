@@ -4,24 +4,22 @@ Welcome to **whatsapp-js**. These guidelines should be reviewed before submittin
 
 ## 1. Development Management
 
-All development workflows are managed through the [Taskfile](../Taskfile.yml) or Bun scripts:
+All development workflows are managed through Bun scripts:
 
-| Task        | Command          | Description                                                               |
-| :---------- | :--------------- | :------------------------------------------------------------------------ |
-| `install`   | `task install`   | Download and install project dependencies with `bun install`.             |
-| `dev`       | `task dev`       | Start the Next.js fullstack development server on `localhost:3000`.       |
-| `bot`       | `task bot`       | Run the standalone headless WhatsApp bot CLI with ANSI terminal QR.       |
-| `typecheck` | `task typecheck` | Run static TypeScript validation (`tsc --noEmit`).                        |
-| `lint`      | `task lint`      | Lint the codebase with ESLint.                                            |
-| `build`     | `task build`     | Compile Next.js and server assets for production.                         |
-| `clean`     | `task clean`     | Remove build artifacts, `.next`, and temporary test sessions.             |
+| Script      | Command             | Description                                               |
+| :---------- | :------------------ | :-------------------------------------------------------- |
+| `install`   | `bun install`       | Download and install project dependencies.                |
+| `dev`       | `bun run dev`       | Start the Next.js development server on `localhost:3000`. |
+| `typecheck` | `bun run typecheck` | Run static TypeScript validation (`tsc --noEmit`).        |
+| `lint`      | `bun run lint`      | Lint the codebase with ESLint.                            |
+| `build`     | `bun run build`     | Compile Next.js production bundle.                        |
 
 ## 2. Architecture & Code Quality
 
 - **AI Agents**: If you are an AI assistant, read [AGENTS](../AGENTS.md) carefully before making modifications.
 - **Protocol Library**: All WhatsApp protocol logic must use [`zapo-js`](https://github.com/vinikjkkj/zapo) and `@zapo-js/store-sqlite`. Do not introduce deprecated or incompatible libraries.
 - **Strict Types**: Every module, interface, and handler must have comprehensive TypeScript type definitions. Do not use unchecked `any`.
-- **Formatting**: Code must adhere to strict formatting and pass `task lint` & `task typecheck` before creating PRs.
+- **Formatting**: Code must adhere to strict formatting and pass `bun run lint` & `bun run typecheck` before creating PRs.
 - **Commits**: Conventional commit conventions must be followed (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`).
 
 ## 3. Pull Request Workflow

@@ -1,11 +1,10 @@
 {
   "name": "whatsapp-js",
   "version": "1.0.0",
-  "description": "WhatsApp automation bot and web platform built with Bun, TypeScript, Next.js, and zapo-js",
+  "description": "WhatsApp Web client built with Bun, TypeScript, Next.js, and zapo-js",
   "private": true,
   "scripts": {
     "dev": "bun --bun next dev",
-    "bot": "bun run src/bot/cli.ts",
     "build": "next build",
     "start": "bun --bun next start",
     "lint": "eslint",
@@ -24,11 +23,13 @@
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
+    "@types/bun": "^1.4.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
+    "playwright": "^1.64.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   },
