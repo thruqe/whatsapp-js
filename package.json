@@ -4,10 +4,10 @@
   "description": "WhatsApp automation bot and web platform built with Bun, TypeScript, Next.js, and zapo-js",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "bun --bun next dev",
     "bot": "bun run src/bot/cli.ts",
     "build": "next build",
-    "start": "next start",
+    "start": "bun --bun next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit"
   },

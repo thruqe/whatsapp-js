@@ -6,7 +6,7 @@
  */
 
 import QRCode from "qrcode";
-import { ConsoleLogger, WaClient, type proto } from "zapo-js";
+import { ConsoleLogger, WaClient } from "zapo-js";
 import { initializeSessionStore } from "./store";
 import { eventBus } from "./events";
 import { extractIncomingText, formatJidToPhone, normalizeTargetJid } from "./helpers";
@@ -241,7 +241,6 @@ export class WhatsAppClientManager {
 
 // Global singleton instance across Next.js reloads
 declare global {
-  // eslint-disable-next-line no-var
   var __whatsappClientManager: WhatsAppClientManager | undefined;
 }
 

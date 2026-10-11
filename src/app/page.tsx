@@ -7,16 +7,14 @@ import {
   Bot,
   CheckCircle2,
   Cpu,
-  HelpCircle,
   MessageSquare,
   Phone,
   QrCode,
   RefreshCw,
   Send,
-  ShieldAlert,
   Terminal,
-  Zap,
 } from "lucide-react";
+import { LoginScreen, SplashScreen } from "./_components/login/LoginScreen";
 
 interface QrData {
   qr: string;
@@ -46,6 +44,7 @@ interface BotCommand {
 }
 
 export default function DashboardPage() {
+  const [hasSnapshot, setHasSnapshot] = useState(false);
   const [connectionState, setConnectionState] = useState<string>("disconnected");
   const [meJid, setMeJid] = useState<string | null>(null);
   const [qrData, setQrData] = useState<QrData | null>(null);
@@ -80,6 +79,7 @@ export default function DashboardPage() {
           if (data.qr) setQrData(data.qr);
           if (data.pairingCode) setPairingCode(data.pairingCode.code);
           if (data.messages) setMessages(data.messages);
+          setHasSnapshot(true);
         } catch (e) {
           console.error("Error parsing init event:", e);
         }
@@ -223,6 +223,14 @@ export default function DashboardPage() {
   const applyFormatting = (prefix: string, suffix = prefix) => {
     setMessageText((prev) => `${prev}${prefix}text${suffix}`);
   };
+
+  if (!hasSnapshot) {
+    return <SplashScreen />;
+  }
+
+  if (connectionState !== "open") {
+    return <LoginScreen connectionState={connectionState} qrData={qrData} onReloadQr={handleConnect} />;
+  }
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-950 text-slate-100 font-sans">

@@ -77,7 +77,6 @@ class WhatsAppEventBus extends EventEmitter {
 
 // Global singleton instance across Next.js reloads
 declare global {
-  // eslint-disable-next-line no-var
   var __whatsappEventBus: WhatsAppEventBus | undefined;
 }
 

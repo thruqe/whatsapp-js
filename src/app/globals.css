@@ -12,6 +12,64 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* Flat color tokens for the login and splash screens */
+.login-theme {
+  --paper: #f5f4ef;
+  --card: #ffffff;
+  --ink: #111311;
+  --muted: #6b6f6a;
+  --line: #dcdcd4;
+  --accent: #3ddc84;
+  --danger: #d92d20;
+}
+
+@media (prefers-color-scheme: dark) {
+  .login-theme {
+    --paper: #0d0f0e;
+    --card: #151816;
+    --ink: #ecede8;
+    --muted: #8b908a;
+    --line: #2a2e2b;
+    --danger: #f97066;
+  }
+}
+
+@theme {
+  --animate-qr-ttl: qr-ttl linear forwards;
+  --animate-splash: splash-progress 1.4s ease-in-out infinite;
+  --animate-fade-up: fade-up 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-code-in: fade-up 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+
+  @keyframes qr-ttl {
+    from {
+      transform: scaleX(1);
+    }
+    to {
+      transform: scaleX(0);
+    }
+  }
+
+  @keyframes splash-progress {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
