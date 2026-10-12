@@ -5,6 +5,7 @@ import Image from "next/image";
 import {
   Archive,
   ArchiveRestore,
+  ArrowLeft,
   Ban,
   BarChart2,
   Bell,
@@ -74,6 +75,7 @@ interface GroupParticipant {
   name?: string;
   pushName?: string;
   phoneNumber?: string;
+  avatarUrl?: string;
   type?: "admin" | "superadmin" | "member";
   isSuperAdmin?: boolean;
   isAdmin?: boolean;
@@ -160,6 +162,7 @@ interface ChatMessage {
   replyTo?: QuotedMessageInfo;
   reaction?: string;
   isEdited?: boolean;
+  mentionedJid?: string[];
   poll?: {
     name: string;
     options: Array<{ name: string; votesCount?: number }>;
@@ -181,6 +184,7 @@ interface ChatMessage {
 
 interface UserProfile {
   meJid?: string;
+  meLid?: string;
   phone?: string;
   name?: string;
   pushName?: string;
@@ -262,18 +266,18 @@ function formatDurationWasm(sec?: number): string {
 }
 
 function generateWaveformWasm(waveform?: number[], seedOrSize?: number): number[] {
+  const targetBars = 32;
   if (typeof window !== "undefined" && (window as any).__wasmGenerateWaveform) {
     try {
       if (waveform && waveform.length > 0) {
-        return (window as any).__wasmGenerateWaveform(waveform, 48);
+        return (window as any).__wasmGenerateWaveform(waveform, targetBars);
       }
-      return (window as any).__wasmGenerateWaveform(seedOrSize || 42, 48);
+      return (window as any).__wasmGenerateWaveform(seedOrSize || 42, targetBars);
     } catch {
       // fallback
     }
   }
   if (waveform && waveform.length > 0) {
-    const targetBars = 48;
     const max = Math.max(...waveform, 1);
     const result: number[] = [];
     for (let i = 0; i < targetBars; i++) {
@@ -285,7 +289,7 @@ function generateWaveformWasm(waveform?: number[], seedOrSize?: number): number[
   }
   const bars: number[] = [];
   const seed = seedOrSize || 42;
-  for (let i = 0; i < 48; i++) {
+  for (let i = 0; i < targetBars; i++) {
     const val = 15 + ((seed * 7 + i * 13) % 45) + ((i * 17) % 30);
     bars.push(Math.max(12, Math.min(95, val)));
   }
@@ -331,15 +335,19 @@ function formatChatTime(ts: number): string {
    TEXT FORMATTING PARSER & RENDERER
    Supports *bold*, _italic_, ~strikethrough~, `code`, and clickable links.
    ========================================================================= */
-function renderFormattedText(text: string): React.ReactNode {
+function renderFormattedText(
+  text: string,
+  mentionedJid?: string[],
+  onMentionClick?: (target: string) => void
+): React.ReactNode {
   if (!text) return null;
 
   // Split by line breaks
   const lines = text.split("\n");
 
   return lines.map((line, lineIdx) => {
-    // Regex for bold, italic, strike, inline code, and URLs
-    const regex = /(\*([^*]+)\*|_([^_]+)_|~([^~]+)~|`([^`]+)`|(https?:\/\/[^\s]+))/g;
+    // Regex for bold, italic, strike, inline code, URLs, and mentions (@...)
+    const regex = /(\*([^*]+)\*|_([^_]+)_|~([^~]+)~|`([^`]+)`|(https?:\/\/[^\s]+)|(@[a-zA-Z0-9_\-\.]+))/g;
     const elements: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -394,6 +402,23 @@ function renderFormattedText(text: string): React.ReactNode {
             {match[6]}
           </a>
         );
+      } else if (match[7]) {
+        // Mention: @...
+        const mentionToken = match[7];
+        const rawTarget = mentionToken.slice(1);
+        elements.push(
+          <span
+            key={`m-${lineIdx}-${match.index}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onMentionClick) onMentionClick(rawTarget);
+            }}
+            className="inline-flex items-center px-1 py-0.2 rounded font-semibold text-[#00a884] dark:text-[#25d366] bg-[#00a884]/10 hover:bg-[#00a884]/20 cursor-pointer transition select-text"
+            title={`Mentioned: ${mentionToken}`}
+          >
+            {mentionToken}
+          </span>
+        );
       }
 
       lastIndex = regex.lastIndex;
@@ -413,16 +438,39 @@ function renderFormattedText(text: string): React.ReactNode {
 }
 
 /* =========================================================================
-   TELEGRAM-STYLE LETTER AVATAR COMPONENT
+   TELEGRAM-STYLE LETTER AVATAR COMPONENT WITH LOCAL STORAGE CACHING
    ========================================================================= */
+const localAvatarCache: Record<string, string> = (() => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem("wa_avatars_cache");
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+})();
+
+function saveLocalAvatar(jid: string, url: string) {
+  if (typeof window === "undefined" || !jid || !url) return;
+  const clean = jid.includes(":") ? `${jid.split(":")[0]}@${jid.split("@")[1]}` : jid;
+  localAvatarCache[clean] = url;
+  localAvatarCache[jid] = url;
+  try {
+    localStorage.setItem("wa_avatars_cache", JSON.stringify(localAvatarCache));
+  } catch {
+    // quota exceeded or private mode
+  }
+}
+
 interface AvatarProps {
   name: string;
+  jid?: string;
   avatarUrl?: string;
   size?: "sm" | "md" | "lg" | "xl";
   isGroup?: boolean;
 }
 
-const Avatar = memo(function Avatar({ name, avatarUrl, size = "md", isGroup }: AvatarProps) {
+const Avatar = memo(function Avatar({ name, jid, avatarUrl, size = "md", isGroup }: AvatarProps) {
   const sizeClasses = {
     sm: "w-8 h-8 text-xs",
     md: "w-12 h-12 text-base font-semibold",
@@ -430,10 +478,19 @@ const Avatar = memo(function Avatar({ name, avatarUrl, size = "md", isGroup }: A
     xl: "w-24 h-24 text-3xl font-bold",
   };
 
-  if (avatarUrl) {
+  const cleanJid = jid && jid.includes(":") ? `${jid.split(":")[0]}@${jid.split("@")[1]}` : jid;
+  const effectiveUrl = avatarUrl || (cleanJid ? localAvatarCache[cleanJid] : undefined) || (jid ? localAvatarCache[jid] : undefined);
+
+  useEffect(() => {
+    if (jid && avatarUrl) {
+      saveLocalAvatar(jid, avatarUrl);
+    }
+  }, [jid, avatarUrl]);
+
+  if (effectiveUrl) {
     return (
       <div className={`${sizeClasses[size]} rounded-full overflow-hidden shrink-0 shadow-xs border border-slate-200/60`}>
-        <img src={avatarUrl} alt={name} className="w-full h-full object-cover" />
+        <img src={effectiveUrl} alt={name} className="w-full h-full object-cover" />
       </div>
     );
   }
@@ -458,11 +515,12 @@ interface MessageComposerProps {
   editingMessage: ChatMessage | null;
   onCancelReply: () => void;
   onCancelEdit: () => void;
-  onSend: (text: string) => void;
+  onSend: (text: string, mentionedJid?: string[]) => void;
   onSendMedia: (file: File, caption?: string) => void;
   onOpenPollModal: () => void;
   onOpenEventModal: () => void;
   isSending: boolean;
+  participants?: GroupParticipant[];
 }
 
 // Telegram-style Animated/Expressive Emojis
@@ -482,10 +540,13 @@ const MessageComposer = memo(function MessageComposer({
   onOpenPollModal,
   onOpenEventModal,
   isSending,
+  participants,
 }: MessageComposerProps) {
   const [text, setText] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [pendingMentions, setPendingMentions] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -497,11 +558,60 @@ const MessageComposer = memo(function MessageComposer({
     }
   }, [editingMessage]);
 
+  const mentionCandidates = useMemo(() => {
+    if (mentionQuery === null || !participants || participants.length === 0) return [];
+    return participants
+      .filter((p) => {
+        const name = (p.name || p.pushName || p.phoneNumber || "").toLowerCase();
+        const phone = (p.phoneNumber || p.jid || "").toLowerCase();
+        return name.includes(mentionQuery) || phone.includes(mentionQuery);
+      })
+      .slice(0, 5);
+  }, [mentionQuery, participants]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setText(val);
+
+    const cursorPos = e.target.selectionStart || val.length;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const lastAtIndex = textBeforeCursor.lastIndexOf("@");
+
+    if (lastAtIndex !== -1) {
+      const query = textBeforeCursor.slice(lastAtIndex + 1);
+      if (!query.includes(" ")) {
+        setMentionQuery(query.toLowerCase());
+        return;
+      }
+    }
+    setMentionQuery(null);
+  };
+
+  const handleSelectMention = (p: GroupParticipant) => {
+    const input = inputRef.current;
+    const cursorPos = input?.selectionStart || text.length;
+    const textBeforeCursor = text.slice(0, cursorPos);
+    const textAfterCursor = text.slice(cursorPos);
+    const lastAtIndex = textBeforeCursor.lastIndexOf("@");
+    if (lastAtIndex === -1) return;
+
+    const label = p.name || p.pushName || p.phoneNumber || p.jid.split("@")[0];
+    const newTextBefore = textBeforeCursor.slice(0, lastAtIndex) + `@${label} `;
+    const newText = newTextBefore + textAfterCursor;
+
+    setText(newText);
+    setPendingMentions((prev) => new Set(prev).add(p.jid));
+    setMentionQuery(null);
+    input?.focus();
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim() || isSending) return;
-    onSend(text.trim());
+    onSend(text.trim(), Array.from(pendingMentions));
     setText("");
+    setPendingMentions(new Set());
+    setMentionQuery(null);
     setShowEmojiPicker(false);
     setShowAttachMenu(false);
     inputRef.current?.focus();
@@ -680,6 +790,35 @@ const MessageComposer = memo(function MessageComposer({
           <Paperclip className="w-5 h-5" />
         </button>
 
+        {/* Mention Suggestions Popup */}
+        {mentionCandidates.length > 0 && (
+          <div className="absolute bottom-16 left-24 z-40 bg-white border border-slate-200 rounded-2xl shadow-2xl py-1.5 w-64 max-h-48 overflow-y-auto animate-in fade-in-50 zoom-in-95">
+            <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+              Mention Member
+            </div>
+            {mentionCandidates.map((p) => (
+              <button
+                key={`mention-${p.jid}`}
+                type="button"
+                onClick={() => handleSelectMention(p)}
+                className="w-full text-left px-3 py-1.5 hover:bg-blue-50 flex items-center gap-2.5 transition"
+              >
+                <Avatar name={p.name || p.pushName || "~"} jid={p.jid} avatarUrl={p.avatarUrl} size="sm" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-xs font-semibold text-slate-800 truncate block">
+                    {p.name || p.pushName || p.phoneNumber || "~"}
+                  </span>
+                  {p.phoneNumber && (
+                    <span className="text-[10px] text-slate-400 font-mono truncate block">
+                      {p.phoneNumber}
+                    </span>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="flex-1 flex items-center gap-2">
           <input
             ref={inputRef}
@@ -692,7 +831,7 @@ const MessageComposer = memo(function MessageComposer({
                 : "Write a message..."
             }
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={handleInputChange}
             className="flex-1 bg-[#f4f6f8] focus:bg-white text-slate-900 placeholder-slate-400 text-sm rounded-full px-5 py-2.5 border border-transparent focus:border-[#3390ec]/60 focus:ring-2 focus:ring-[#3390ec]/15 outline-none transition"
           />
           <button
@@ -830,10 +969,10 @@ const AudioPlayerBubble = memo(function AudioPlayerBubble({
         )}
       </div>
 
-      <div className="flex-1 min-w-0 flex flex-col justify-center">
+      <div className="flex-1 min-w-0 flex flex-col justify-center overflow-hidden">
         <div
           onClick={seek}
-          className="h-7 flex items-center gap-[2px] cursor-pointer group/wave py-1"
+          className="h-7 flex items-center gap-[2px] cursor-pointer group/wave py-1 w-full max-w-full overflow-hidden flex-nowrap"
           title="Click to seek"
         >
           {waveformBars.map((height, idx) => {
@@ -843,7 +982,7 @@ const AudioPlayerBubble = memo(function AudioPlayerBubble({
               <span
                 key={idx}
                 style={{ height: `${height}%` }}
-                className={`flex-1 min-w-[2px] max-w-[4px] rounded-full transition-colors duration-100 ${
+                className={`flex-1 min-w-0 max-w-[4px] rounded-full transition-colors duration-100 ${
                   isPlayed
                     ? "bg-[#3390ec] group-hover/wave:brightness-95"
                     : "bg-slate-300 group-hover/wave:bg-slate-400"
@@ -1208,7 +1347,7 @@ const ChatBubble = memo(function ChatBubble({
         {(!msg.poll && !msg.event && (!msg.media || msg.media.caption || (msg.text && !msg.text.startsWith("🎨") && !msg.text.startsWith("🎵") && !msg.text.startsWith("📷") && !msg.text.startsWith("🎥") && !msg.text.startsWith("📄")))) && (
           <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1 px-1">
             <div className="whitespace-pre-wrap break-words leading-relaxed flex-1 text-slate-800 text-[13.5px]">
-              {renderFormattedText(msg.text)}
+              {renderFormattedText(msg.text, msg.mentionedJid, onOpenDirectChat ? (t) => onOpenDirectChat(t, t) : undefined)}
             </div>
             <span className="flex items-center space-x-1 text-[11px] text-slate-400 select-none ml-auto shrink-0 pb-0.5">
               {msg.isEdited && (
@@ -1730,7 +1869,7 @@ export default function WhatsAppWebPage() {
     }
   };
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, mentionedJid?: string[]) => {
     if (!activeChat || !text.trim()) return;
 
     if (editingMessage) {
@@ -1768,12 +1907,33 @@ export default function WhatsAppWebPage() {
           to: activeChat.jid,
           text,
           quotedId: replyTarget ? replyTarget.id : undefined,
+          mentionedJid: mentionedJid && mentionedJid.length > 0 ? mentionedJid : undefined,
         }),
       });
     } catch (err) {
       console.error("Error sending message:", err);
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleDeleteMessage = async (msg: ChatMessage, revokeForEveryone = false) => {
+    if (!activeChat) return;
+    try {
+      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+      await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete",
+          to: activeChat.jid,
+          messageId: msg.id,
+          revokeForEveryone,
+          participantJid: msg.senderJid,
+        }),
+      });
+    } catch (err) {
+      console.error("Error deleting message:", err);
     }
   };
 
@@ -2257,11 +2417,28 @@ export default function WhatsAppWebPage() {
     if (!activeChat?.isGroup || !activeChat.participants) return false;
     const myPhoneDigits = userProfile.phone ? userProfile.phone.replace(/\D/g, "") : "";
     const myJidDigits = userProfile.meJid ? userProfile.meJid.replace(/\D/g, "") : "";
+    const myLidDigits = userProfile.meLid ? userProfile.meLid.replace(/\D/g, "") : "";
+
+    // Check if activeChat.owner matches current user
+    if (activeChat.owner) {
+      const ownerDigits = activeChat.owner.replace(/\D/g, "");
+      if (
+        (myPhoneDigits && ownerDigits.includes(myPhoneDigits)) ||
+        (myJidDigits && ownerDigits.includes(myJidDigits)) ||
+        (myLidDigits && ownerDigits.includes(myLidDigits))
+      ) {
+        return true;
+      }
+    }
+
     return activeChat.participants.some((p) => {
       const pDigits = p.jid.replace(/\D/g, "");
+      const pPhoneDigits = p.phoneNumber ? p.phoneNumber.replace(/\D/g, "") : "";
       const isSelf =
         (myPhoneDigits && pDigits.includes(myPhoneDigits)) ||
-        (myJidDigits && pDigits.includes(myJidDigits));
+        (myJidDigits && pDigits.includes(myJidDigits)) ||
+        (myLidDigits && pDigits.includes(myLidDigits)) ||
+        (myPhoneDigits && pPhoneDigits && pPhoneDigits.includes(myPhoneDigits));
       return isSelf && (p.isAdmin || p.isSuperAdmin || p.type === "admin" || p.type === "superadmin");
     });
   }, [activeChat, userProfile]);
@@ -2272,6 +2449,10 @@ export default function WhatsAppWebPage() {
       new Map(chats.filter((c) => Boolean(c?.jid)).map((c) => [c.jid, c])).values()
     );
   }, [chats]);
+
+  const archivedChatsCount = useMemo(() => {
+    return deduplicatedChats.filter((c) => Boolean(c.isArchived)).length;
+  }, [deduplicatedChats]);
 
   const filteredChats = useMemo(() => {
     return deduplicatedChats.filter((c) => {
@@ -2341,7 +2522,17 @@ export default function WhatsAppWebPage() {
           if (m.chatJid === activeChat.jid) return true;
           const cleanA = m.chatJid.includes(":") ? `${m.chatJid.split(":")[0]}@${m.chatJid.split("@")[1]}` : m.chatJid;
           const cleanB = activeChat.jid.includes(":") ? `${activeChat.jid.split(":")[0]}@${activeChat.jid.split("@")[1]}` : activeChat.jid;
-          return cleanA === cleanB;
+          if (cleanA === cleanB) return true;
+
+          // For 1-on-1 chats, match phone digits or LID aliases
+          if (!activeChat.isGroup && !cleanA.endsWith("@g.us") && !cleanB.endsWith("@g.us")) {
+            const digitsA = cleanA.replace(/\D/g, "");
+            const digitsB = cleanB.replace(/\D/g, "");
+            if (digitsA.length >= 7 && digitsB.length >= 7 && (digitsA.includes(digitsB) || digitsB.includes(digitsA))) {
+              return true;
+            }
+          }
+          return false;
         })
         .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
     : [];
@@ -2763,19 +2954,54 @@ export default function WhatsAppWebPage() {
                 })}
               </div>
             )
-          ) : topLevelChats.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 text-center text-slate-400 px-4">
-              <MessageSquare className="w-8 h-8 stroke-1 mb-2 text-slate-300" />
-              <p className="text-xs font-medium">No chats found.</p>
-              <button
-                onClick={handleSyncGroups}
-                className="mt-3 text-[#3390ec] text-xs font-semibold hover:underline flex items-center gap-1"
-              >
-                <RefreshCw className="w-3.5 h-3.5" /> Refresh chats
-              </button>
-            </div>
           ) : (
-            topLevelChats.map((chat, idx) => {
+            <>
+              {/* Archived Chats Top Banner */}
+              {archivedChatsCount > 0 && filterTab !== "archived" && !searchQuery.trim() && (
+                <button
+                  onClick={() => setFilterTab("archived")}
+                  className="w-full flex items-center justify-between px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition text-slate-700 text-xs font-semibold"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+                      <Archive className="w-4 h-4 text-[#3390ec]" />
+                    </div>
+                    <span className="text-sm font-medium text-slate-800">Archived</span>
+                  </div>
+                  <span className="text-[11px] text-[#3390ec] font-bold bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full font-mono">
+                    {archivedChatsCount}
+                  </span>
+                </button>
+              )}
+
+              {/* Archived Filter Tab Header */}
+              {filterTab === "archived" && (
+                <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs">
+                  <button
+                    onClick={() => setFilterTab("all")}
+                    className="flex items-center gap-1.5 text-[#3390ec] font-semibold hover:underline"
+                  >
+                    <ArrowLeft className="w-4 h-4" /> Back to Chats
+                  </button>
+                  <span className="text-slate-500 font-medium font-mono">
+                    {archivedChatsCount} archived
+                  </span>
+                </div>
+              )}
+
+              {topLevelChats.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-48 text-center text-slate-400 px-4">
+                  <MessageSquare className="w-8 h-8 stroke-1 mb-2 text-slate-300" />
+                  <p className="text-xs font-medium">No chats found.</p>
+                  <button
+                    onClick={handleSyncGroups}
+                    className="mt-3 text-[#3390ec] text-xs font-semibold hover:underline flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Refresh chats
+                  </button>
+                </div>
+              ) : (
+                topLevelChats.map((chat, idx) => {
               const isSelected = activeChat?.jid === chat.jid;
               const safeKey = chat.jid ? `chat-thread-${chat.jid}` : `chat-thread-idx-${idx}`;
               const isGroup = chat.isGroup;
@@ -2879,47 +3105,62 @@ export default function WhatsAppWebPage() {
                     </div>
                   </div>
 
-                  {/* Collapsible Subgroups under Community */}
-                  {isCommunity && isExpanded && subgroups.map((sub, sIdx) => {
-                    const isSubSelected = activeChat?.jid === sub.jid;
-                    return (
-                      <div
-                        key={`sub-${sub.jid}-${sIdx}`}
-                        onClick={() => {
-                          setActiveChat(sub);
-                          setShowChatInfoDrawer(false);
-                        }}
-                        onContextMenu={(e) => handleChatContextMenu(e, sub)}
-                        className={`flex items-center pl-9 pr-4 py-2.5 cursor-pointer transition relative border-l-3 border-[#3390ec]/50 ml-6 ${
-                          isSubSelected ? "bg-[#eaf3fc]" : "hover:bg-[#f8fafd]"
-                        }`}
-                      >
-                        <Avatar name={sub.name} avatarUrl={sub.avatarUrl} size="sm" isGroup={true} />
-                        <div className="ml-3 flex-1 min-w-0">
-                          <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-xs font-semibold text-slate-700 truncate">
-                              {sub.name}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-mono">
-                              {formatChatTime(sub.lastTimestamp)}
-                            </span>
+                  {/* Collapsible Subgroups under Community with branch layout */}
+                  {isCommunity && isExpanded && (
+                    <div className="relative pl-6 bg-slate-50/50 border-b border-slate-100">
+                      {subgroups.map((sub, sIdx) => {
+                        const isSubSelected = activeChat?.jid === sub.jid;
+                        const isLast = sIdx === subgroups.length - 1;
+                        return (
+                          <div
+                            key={`sub-${sub.jid}-${sIdx}`}
+                            onClick={() => {
+                              setActiveChat(sub);
+                              setShowChatInfoDrawer(false);
+                            }}
+                            onContextMenu={(e) => handleChatContextMenu(e, sub)}
+                            className={`flex items-center pl-7 pr-4 py-2.5 cursor-pointer transition relative ${
+                              isSubSelected ? "bg-[#eaf3fc]" : "hover:bg-slate-100/70"
+                            }`}
+                          >
+                            {/* Tree branch connector line */}
+                            <div className="absolute left-3.5 top-0 bottom-0 w-px bg-slate-300" />
+                            <div
+                              className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-px bg-slate-300 ${
+                                isLast ? "rounded-bl" : ""
+                              }`}
+                            />
+
+                            <Avatar name={sub.name} jid={sub.jid} avatarUrl={sub.avatarUrl} size="sm" isGroup={true} />
+                            <div className="ml-3 flex-1 min-w-0">
+                              <div className="flex items-center justify-between mb-0.5">
+                                <span className="text-xs font-semibold text-slate-800 truncate">
+                                  {sub.name}
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  {formatChatTime(sub.lastTimestamp)}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-[11px] text-slate-500 truncate">{sub.lastMessage}</span>
+                                {sub.unreadCount > 0 && (
+                                  <span className="min-w-3.5 px-1 h-3.5 rounded-full bg-[#3390ec] text-white text-[9px] font-bold flex items-center justify-center">
+                                    {sub.unreadCount}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] text-slate-500 truncate">{sub.lastMessage}</span>
-                            {sub.unreadCount > 0 && (
-                              <span className="min-w-3.5 px-1 h-3.5 rounded-full bg-[#3390ec] text-white text-[9px] font-bold flex items-center justify-center">
-                                {sub.unreadCount}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        );
+                      })}
+                    </div>
+                  )}
                 </React.Fragment>
               );
             })
-            )}
+          )}
+        </>
+      )}
         </div>
       </aside>
 
@@ -3291,7 +3532,7 @@ export default function WhatsAppWebPage() {
                                 className="flex items-center justify-between py-2 px-2.5 hover:bg-slate-50 rounded-xl transition group"
                               >
                                 <div className="flex items-center gap-2.5 min-w-0">
-                                  <Avatar name={displayName} size="sm" />
+                                  <Avatar name={displayName} jid={p.jid} avatarUrl={p.avatarUrl} size="sm" />
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-1.5">
                                       <span className="text-xs font-semibold text-slate-800 block truncate">
@@ -3364,6 +3605,7 @@ export default function WhatsAppWebPage() {
               onOpenPollModal={() => setShowPollModal(true)}
               onOpenEventModal={() => setShowEventModal(true)}
               isSending={isSending}
+              participants={activeChat.participants}
             />
           </div>
         )}
@@ -3597,6 +3839,29 @@ export default function WhatsAppWebPage() {
               >
                 <Copy className="w-4 h-4 text-slate-400" /> Copy Message ID
               </button>
+              <div className="h-px bg-slate-100 my-1" />
+              <button
+                onClick={() => {
+                  const target = contextMenu.targetMessage!;
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                  handleDeleteMessage(target, false);
+                }}
+                className="w-full text-left px-3.5 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2.5 transition"
+              >
+                <Trash2 className="w-4 h-4 text-rose-500" /> Delete for me
+              </button>
+              {(contextMenu.targetMessage.fromMe || (activeChat?.isGroup && currentUserIsAdmin)) && (
+                <button
+                  onClick={() => {
+                    const target = contextMenu.targetMessage!;
+                    setContextMenu((prev) => ({ ...prev, visible: false }));
+                    handleDeleteMessage(target, true);
+                  }}
+                  className="w-full text-left px-3.5 py-2 hover:bg-rose-50 text-rose-600 font-medium flex items-center gap-2.5 transition"
+                >
+                  <Trash2 className="w-4 h-4 text-rose-600" /> Delete for everyone
+                </button>
+              )}
             </>
           )}
 
@@ -4346,29 +4611,66 @@ export default function WhatsAppWebPage() {
                 </button>
               )}
 
-              {activeStatusGroup.items[activeStoryIndex]?.media?.thumbnailBase64 ? (
-                <div className="w-full h-full max-h-[460px] flex items-center justify-center">
-                  <img
-                    src={`data:image/jpeg;base64,${activeStatusGroup.items[activeStoryIndex].media.thumbnailBase64}`}
-                    alt="Status media"
-                    className="max-h-full max-w-full rounded-2xl object-contain shadow-2xl"
-                  />
-                </div>
-              ) : (
-                <div className="text-center px-6">
-                  <div className="w-16 h-16 rounded-full bg-[#3390ec]/20 border border-[#3390ec]/30 flex items-center justify-center mx-auto mb-4 text-[#3390ec]">
-                    <Radio className="w-8 h-8" />
+              {(() => {
+                const curItem = activeStatusGroup.items[activeStoryIndex];
+                if (!curItem) return null;
+
+                const hasMedia = !!curItem.media;
+                const mediaType = curItem.media?.type;
+                const streamUrl = `/api/messages/download?id=${encodeURIComponent(curItem.id)}&view=1`;
+
+                if (mediaType === "video") {
+                  return (
+                    <div className="w-full h-full max-h-[480px] flex items-center justify-center">
+                      <video
+                        src={streamUrl}
+                        poster={
+                          curItem.media?.thumbnailBase64
+                            ? `data:image/jpeg;base64,${curItem.media.thumbnailBase64}`
+                            : undefined
+                        }
+                        controls
+                        autoPlay
+                        playsInline
+                        className="max-h-full max-w-full rounded-2xl object-contain shadow-2xl"
+                      />
+                    </div>
+                  );
+                }
+
+                if (mediaType === "image" || hasMedia) {
+                  return (
+                    <div className="w-full h-full max-h-[480px] flex items-center justify-center">
+                      <img
+                        src={streamUrl}
+                        onError={(e) => {
+                          if (curItem.media?.thumbnailBase64) {
+                            (e.target as HTMLImageElement).src = `data:image/jpeg;base64,${curItem.media.thumbnailBase64}`;
+                          }
+                        }}
+                        alt="Status media"
+                        className="max-h-full max-w-full rounded-2xl object-contain shadow-2xl"
+                      />
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="text-center px-8 py-12 w-full max-w-sm rounded-2xl bg-gradient-to-br from-[#128C7E]/40 via-teal-900/30 to-slate-900 border border-teal-500/20 shadow-xl flex flex-col items-center justify-center">
+                    <div className="w-16 h-16 rounded-full bg-[#25D366]/20 border border-[#25D366]/40 flex items-center justify-center mx-auto mb-5 text-[#25D366] shadow-inner">
+                      <Radio className="w-8 h-8" />
+                    </div>
+                    <p className="text-xl text-white font-medium leading-relaxed break-words max-h-64 overflow-y-auto">
+                      {curItem.text || "Status update"}
+                    </p>
                   </div>
-                  <p className="text-lg text-slate-100 font-light leading-relaxed">
-                    {activeStatusGroup.items[activeStoryIndex]?.text || "Status update"}
-                  </p>
-                </div>
-              )}
+                );
+              })()}
             </div>
 
-            {activeStatusGroup.items[activeStoryIndex]?.media?.thumbnailBase64 &&
+            {activeStatusGroup.items[activeStoryIndex]?.media &&
               activeStatusGroup.items[activeStoryIndex]?.text && (
-                <div className="p-4 bg-black/80 text-center text-sm text-slate-200 border-t border-white/10">
+                <div className="p-4 bg-black/80 text-center text-sm text-slate-200 border-t border-white/10 font-medium">
                   {activeStatusGroup.items[activeStoryIndex].text}
                 </div>
               )}

@@ -307,6 +307,27 @@ export function extractEventInfo(
 }
 
 /**
+ * Extracts mentioned JIDs from a message.
+ */
+export function extractMentions(
+  message: proto.IMessage | null | undefined
+): string[] {
+  if (!message) return [];
+  const list =
+    message.extendedTextMessage?.contextInfo?.mentionedJid ||
+    message.imageMessage?.contextInfo?.mentionedJid ||
+    message.videoMessage?.contextInfo?.mentionedJid ||
+    message.documentMessage?.contextInfo?.mentionedJid ||
+    message.audioMessage?.contextInfo?.mentionedJid ||
+    message.stickerMessage?.contextInfo?.mentionedJid;
+
+  if (Array.isArray(list) && list.length > 0) {
+    return list.map((j) => String(j));
+  }
+  return [];
+}
+
+/**
  * Extracts rich media information (type, caption, thumbnail, duration, filename) from a message.
  */
 export function extractMediaInfo(

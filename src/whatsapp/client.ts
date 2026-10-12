@@ -15,6 +15,7 @@ import {
   extractQuotedInfo,
   extractPollInfo,
   extractEventInfo,
+  extractMentions,
   formatJidToPhone,
   formatPhoneNumber,
   normalizeTargetJid,
@@ -26,6 +27,7 @@ export class WhatsAppClientManager {
   private connecting = false;
   private startTime = Date.now();
   private meJid: string | null = null;
+  public meLid: string | null = null;
   private myAvatarUrl: string | undefined = undefined;
   private myPushName: string | undefined = undefined;
 
@@ -86,15 +88,23 @@ export class WhatsAppClientManager {
 
     client.on("auth_paired", ({ credentials }) => {
       this.meJid = credentials.meJid ?? null;
+      this.meLid = (credentials as any).meLid ?? null;
       this.myPushName = credentials.pushName ?? undefined;
       eventBus.clearQr();
       eventBus.setState("open", this.meJid ?? undefined);
-      console.log(`[whatsapp] Paired successfully as: ${this.meJid}`);
+      console.log(`[whatsapp] Paired successfully as: ${this.meJid} (LID: ${this.meLid})`);
       void this.loadDatabaseHistory().then(() => this.syncGroups());
       if (this.meJid) {
         void this.fetchProfilePicture(this.meJid).then((url) => {
           this.myAvatarUrl = url;
         });
+      }
+    });
+
+    client.on("offline_resume" as any, (event: any) => {
+      if (event?.status === "complete") {
+        console.log(`[whatsapp] Offline catchup completed (total stanzas: ${event?.totalStanzas}). Reloading database history.`);
+        void this.loadDatabaseHistory().then(() => this.syncGroups());
       }
     });
 
@@ -133,6 +143,16 @@ export class WhatsAppClientManager {
         }
       }
 
+      // 2. Check for revoked message (REVOKE protocol message)
+      if (
+        protocolMessage &&
+        (protocolMessage.type === 0 || (protocolMessage as any).type === "REVOKE") &&
+        protocolMessage.key?.id
+      ) {
+        eventBus.deleteMessage(protocolMessage.key.id);
+        return;
+      }
+
       const msgId = event.key.id ?? Math.random().toString(36).slice(2);
       const text = extractIncomingText(event.message);
       const media = extractMediaInfo(event.message, msgId);
@@ -152,6 +172,8 @@ export class WhatsAppClientManager {
         (contact?.phoneNumber ? formatPhoneNumber(contact.phoneNumber) : formatJidToPhone(senderJid));
 
       if (isStatus) {
+        // Exclude emoji reaction messages and protocol messages to status broadcast
+        if (event.message?.reactionMessage || event.message?.protocolMessage) return;
         eventBus.pushStatus({
           id: msgId,
           senderJid,
@@ -165,6 +187,7 @@ export class WhatsAppClientManager {
 
       const poll = extractPollInfo(event.message);
       const eventInfo = extractEventInfo(event.message);
+      const mentionedJid = extractMentions(event.message);
 
       if (text || media || poll || eventInfo) {
         const msg: ChatMessage = {
@@ -180,6 +203,7 @@ export class WhatsAppClientManager {
           replyTo,
           poll,
           event: eventInfo,
+          mentionedJid: mentionedJid.length > 0 ? mentionedJid : undefined,
         };
         eventBus.pushMessage(msg);
       }
@@ -259,14 +283,18 @@ export class WhatsAppClientManager {
       const { default: Database } = await import("bun:sqlite");
       const db = new Database(dbPath);
 
-      // Check credentials for meJid & pushName
-      const credRow = db.query("SELECT me_jid, push_name FROM auth_credentials LIMIT 1").get() as {
+      // Check credentials for meJid, meLid & pushName
+      const credRow = db.query("SELECT me_jid, me_lid, push_name FROM auth_credentials LIMIT 1").get() as {
         me_jid: string | null;
+        me_lid: string | null;
         push_name: string | null;
       } | null;
       if (credRow?.me_jid) {
         this.meJid = credRow.me_jid;
         this.myPushName = credRow.push_name || undefined;
+      }
+      if (credRow?.me_lid) {
+        this.meLid = credRow.me_lid;
       }
 
       // Check if mailbox_messages and mailbox_contacts exist
@@ -304,6 +332,25 @@ export class WhatsAppClientManager {
         });
       }
 
+      // Check mailbox_threads for archived / pinned / muted states
+      try {
+        const threadRows = db.query(
+          "SELECT jid, archived, pinned, mute_end_ms FROM mailbox_threads"
+        ).all() as Array<{
+          jid: string;
+          archived: number | null;
+          pinned: number | null;
+          mute_end_ms: number | null;
+        }>;
+        for (const tr of threadRows) {
+          if (tr.archived) eventBus.setChatArchive(tr.jid, true);
+          if (tr.pinned) eventBus.setChatPin(tr.jid, true);
+          if (tr.mute_end_ms && tr.mute_end_ms > Date.now()) eventBus.setChatMuted(tr.jid, true);
+        }
+      } catch {
+        // Table not present or query failed
+      }
+
       // 2. Fetch all messages ordered chronologically
       const { proto } = await import("zapo-js");
       const msgRows = db.query(
@@ -325,20 +372,26 @@ export class WhatsAppClientManager {
         let text = "";
         let media: import("./types").MediaMessageInfo | undefined = undefined;
         let replyTo: import("./types").QuotedMessageInfo | undefined = undefined;
+        let mentionedJid: string[] = [];
+
+        const isStatus = m.thread_jid === "status@broadcast";
 
         if (m.message_bytes) {
           try {
             const decoded = proto.Message.decode(m.message_bytes);
+            if (isStatus && (decoded.reactionMessage || decoded.protocolMessage)) {
+              continue;
+            }
             text = extractIncomingText(decoded) || "";
             media = extractMediaInfo(decoded, m.message_id);
             replyTo = extractQuotedInfo(decoded);
+            mentionedJid = extractMentions(decoded);
           } catch {
             text = "";
           }
         }
         if (!text && !media) continue;
 
-        const isStatus = m.thread_jid === "status@broadcast";
         const isGroup = m.thread_jid.endsWith("@g.us");
         const sender = isGroup || isStatus ? m.participant_jid || m.sender_jid || m.thread_jid : m.sender_jid || m.thread_jid;
         const contact = eventBus.getContact(m.thread_jid);
@@ -383,6 +436,7 @@ export class WhatsAppClientManager {
           isGroup,
           media,
           replyTo,
+          mentionedJid: mentionedJid.length > 0 ? mentionedJid : undefined,
         };
         historyMsgs.push(msg);
 
@@ -454,53 +508,14 @@ export class WhatsAppClientManager {
 
           const subject = g.subject || "WhatsApp Group";
           const desc = g.desc || undefined;
-          const participantsCount =
-            g.participants?.length ?? (g.size ? Number(g.size) : undefined);
           const creationTimestamp = g.creation
             ? Number(g.creation) * 1000
             : Date.now();
           const owner = g.owner || undefined;
 
           // Format participants cleanly, resolving pushnames, admins first, and alphabetical order
-          const rawParticipants: any[] = Array.isArray(g.participants) ? g.participants : [];
-          const cleanParticipants: import("./types").GroupParticipant[] = rawParticipants.map((p: any) => {
-            const rawJid = p.jid || "";
-            const contact = eventBus.getContact(rawJid);
-            const rawPhone =
-              p.phoneNumber ||
-              contact?.phoneNumber ||
-              (!rawJid.endsWith("@lid") ? rawJid.split("@")[0] : undefined);
-            const formattedPhone = rawPhone ? formatPhoneNumber(rawPhone) : undefined;
-
-            const pushName = p.pushName || contact?.pushName || p.displayName || undefined;
-            const displayName = contact?.displayName || pushName;
-            const name = displayName || formattedPhone || "~";
-
-            const isAdmin = Boolean(p.isAdmin || p.type === "admin" || p.admin === "admin");
-            const isSuperAdmin = Boolean(p.isSuperAdmin || p.type === "superadmin" || p.admin === "superadmin");
-
-            return {
-              jid: rawJid,
-              name,
-              pushName,
-              phoneNumber: formattedPhone,
-              type: isSuperAdmin ? "superadmin" : isAdmin ? "admin" : "member",
-              isAdmin,
-              isSuperAdmin,
-            };
-          });
-
-          // Sort admins first, then alphabetically by name/pushName
-          cleanParticipants.sort((a, b) => {
-            const aIsAdmin = Boolean(a.isSuperAdmin || a.isAdmin || a.type === "admin" || a.type === "superadmin");
-            const bIsAdmin = Boolean(b.isSuperAdmin || b.isAdmin || b.type === "admin" || b.type === "superadmin");
-            if (aIsAdmin && !bIsAdmin) return -1;
-            if (!aIsAdmin && bIsAdmin) return 1;
-
-            const nameA = (a.name || a.pushName || a.phoneNumber || "~").toLowerCase();
-            const nameB = (b.name || b.pushName || b.phoneNumber || "~").toLowerCase();
-            return nameA.localeCompare(nameB);
-          });
+          const cleanParticipants = this.formatGroupParticipants(g.participants as any[]);
+          const participantsCount = g.participants?.length ?? (g.size ? Number(g.size) : cleanParticipants.length);
 
           // Check if group already has messages in memory or database
           const existingChat = eventBus.getChat(groupJid);
@@ -595,6 +610,10 @@ export class WhatsAppClientManager {
     const list: import("./types").GroupParticipant[] = (Array.isArray(rawParticipants) ? rawParticipants : []).map((p: any) => {
       const rawJid = p.jid || "";
       const contact = eventBus.getContact(rawJid);
+      const cachedAvatar = eventBus.getProfilePicture(rawJid);
+      if (!cachedAvatar && this.client && eventBus.getState().state === "open") {
+        void this.fetchProfilePicture(rawJid);
+      }
       const rawPhone =
         p.phoneNumber ||
         contact?.phoneNumber ||
@@ -613,6 +632,7 @@ export class WhatsAppClientManager {
         name,
         pushName,
         phoneNumber: formattedPhone,
+        avatarUrl: cachedAvatar,
         type: isSuperAdmin ? "superadmin" : isAdmin ? "admin" : "member",
         isAdmin,
         isSuperAdmin,
@@ -748,6 +768,7 @@ export class WhatsAppClientManager {
         let text = "";
         let media: import("./types").MediaMessageInfo | undefined = undefined;
         let replyTo: import("./types").QuotedMessageInfo | undefined = undefined;
+        let mentionedJid: string[] = [];
 
         if (m.message_bytes) {
           try {
@@ -755,6 +776,7 @@ export class WhatsAppClientManager {
             text = extractIncomingText(decoded) || "";
             media = extractMediaInfo(decoded, m.message_id);
             replyTo = extractQuotedInfo(decoded);
+            mentionedJid = extractMentions(decoded);
           } catch {
             text = "";
           }
@@ -783,6 +805,7 @@ export class WhatsAppClientManager {
           isGroup,
           media,
           replyTo,
+          mentionedJid: mentionedJid.length > 0 ? mentionedJid : undefined,
         };
         loadedMsgs.push(msg);
       }
@@ -805,7 +828,8 @@ export class WhatsAppClientManager {
   public async sendMessage(
     to: string,
     text: string,
-    quotedMessage?: ChatMessage
+    quotedMessage?: ChatMessage,
+    mentionedJid?: string[]
   ): Promise<unknown> {
     const client = await this.init();
     const targetJid = normalizeTargetJid(to);
@@ -839,6 +863,15 @@ export class WhatsAppClientManager {
       };
     }
 
+    if (mentionedJid && mentionedJid.length > 0) {
+      const cleanMentions = mentionedJid.map((j) => normalizeTargetJid(j));
+      sendOptions.mentions = cleanMentions;
+      if (!sendOptions.contextInfo) {
+        sendOptions.contextInfo = {};
+      }
+      sendOptions.contextInfo.mentionedJid = cleanMentions;
+    }
+
     const result = await client.message.send(targetJid, text, sendOptions);
 
     const isGroup = targetJid.endsWith("@g.us");
@@ -851,6 +884,7 @@ export class WhatsAppClientManager {
       text,
       timestamp: Date.now(),
       isGroup,
+      mentionedJid: mentionedJid && mentionedJid.length > 0 ? mentionedJid : undefined,
       replyTo: quotedMessage
         ? {
             id: quotedMessage.id,
@@ -864,6 +898,52 @@ export class WhatsAppClientManager {
     eventBus.pushMessage(msg);
 
     return result;
+  }
+
+  /**
+   * Deletes a message locally (for me) or revokes it across WhatsApp (for everyone).
+   */
+  public async deleteMessage(
+    chatJid: string,
+    messageId: string,
+    revokeForEveryone = false,
+    participantJid?: string
+  ): Promise<void> {
+    const targetJid = normalizeTargetJid(chatJid);
+
+    if (revokeForEveryone && this.client) {
+      const msg = eventBus.getMessages(targetJid).find((m) => m.id === messageId);
+      const isGroup = targetJid.endsWith("@g.us");
+      const fromMe = msg ? Boolean(msg.fromMe) : true;
+      const targetParticipant = participantJid || (msg && !fromMe && isGroup ? msg.senderJid : undefined);
+
+      await this.client.message.send(targetJid, {
+        type: "revoke",
+        target: {
+          id: messageId,
+          remoteJid: targetJid,
+          fromMe,
+          participant: targetParticipant ? normalizeTargetJid(targetParticipant) : undefined,
+        },
+      } as any).catch((err) => {
+        console.error("[whatsapp] Error revoking message on wire:", err);
+      });
+    }
+
+    // Delete from SQLite database
+    try {
+      const { resolve } = await import("node:path");
+      const { default: Database } = await import("bun:sqlite");
+      const dbPath = resolve(process.cwd(), process.env.AUTH_DIR || ".auth", "state.sqlite");
+      const db = new Database(dbPath);
+      db.query("DELETE FROM mailbox_messages WHERE message_id = ?").run(messageId);
+      db.close();
+    } catch {
+      // Ignore SQLite deletion errors
+    }
+
+    // Remove from in-memory bus and notify UI
+    eventBus.deleteMessage(messageId);
   }
 
   /**
@@ -1278,6 +1358,7 @@ export class WhatsAppClientManager {
       sessionId: process.env.SESSION_ID || "default",
       state: busState.state,
       meJid: me,
+      meLid: this.meLid ?? undefined,
       phone,
       name,
       pushName: name,

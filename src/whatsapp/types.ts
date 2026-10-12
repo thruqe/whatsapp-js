@@ -8,6 +8,7 @@ export interface SessionInfo {
   sessionId: string;
   state: ConnectionState;
   meJid?: string;
+  meLid?: string;
   phone?: string;
   pushName?: string;
   name?: string;
@@ -34,6 +35,7 @@ export interface GroupParticipant {
   name?: string;
   pushName?: string;
   phoneNumber?: string;
+  avatarUrl?: string;
   type?: "admin" | "superadmin" | "member";
   isSuperAdmin?: boolean;
   isAdmin?: boolean;
@@ -139,10 +141,12 @@ export interface ChatMessage {
     isVideo?: boolean;
     status?: string;
   };
+  mentionedJid?: string[];
 }
 
 export interface SendMessagePayload {
   to: string;
   text: string;
   quotedId?: string;
+  mentionedJid?: string[];
 }

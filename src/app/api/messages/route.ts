@@ -21,7 +21,32 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, to, text, quotedId, messageId } = body;
+    const {
+      action,
+      to,
+      text,
+      quotedId,
+      messageId,
+      mentionedJid,
+      revokeForEveryone,
+      participantJid,
+    } = body;
+
+    if (action === "delete") {
+      if (!to || !messageId) {
+        return NextResponse.json(
+          { success: false, error: "Recipient 'to' and 'messageId' are required for delete" },
+          { status: 400 }
+        );
+      }
+      await whatsappManager.deleteMessage(
+        to,
+        messageId,
+        Boolean(revokeForEveryone),
+        participantJid
+      );
+      return NextResponse.json({ success: true });
+    }
 
     if (action === "edit") {
       if (!to || !messageId || !text) {
@@ -150,7 +175,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const result = await whatsappManager.sendMessage(to, text, quotedMessage);
+    const result = await whatsappManager.sendMessage(to, text, quotedMessage, mentionedJid);
     return NextResponse.json({
       success: true,
       result,

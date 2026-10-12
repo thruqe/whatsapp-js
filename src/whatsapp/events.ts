@@ -34,7 +34,7 @@ class WhatsAppEventBus extends EventEmitter {
   // Status broadcast updates stored by id
   private readonly statusesMap = new Map<string, import("./types").StatusBroadcast>();
   private readonly allMessages: ChatMessage[] = [];
-  private readonly maxMessagesPerChat = 250;
+  private readonly maxMessagesPerChat = 2000;
 
   public registerAlias(jid1: string, jid2: string): void {
     if (!jid1 || !jid2 || jid1 === jid2) return;
@@ -93,16 +93,28 @@ class WhatsAppEventBus extends EventEmitter {
     return undefined;
   }
 
+  public getProfilePicture(jid: string): string | undefined {
+    if (!jid) return undefined;
+    const cleanJid = jid.includes(":") ? `${jid.split(":")[0]}@${jid.split("@")[1]}` : jid;
+    const chat = this.chatsMap.get(cleanJid) || this.chatsMap.get(jid);
+    if (chat?.avatarUrl) return chat.avatarUrl;
+    const contact = this.contactsMap.get(cleanJid) || this.contactsMap.get(jid);
+    if (contact?.avatarUrl) return contact.avatarUrl;
+    return undefined;
+  }
+
   public setProfilePicture(jid: string, url: string): void {
     if (!jid || !url) return;
-    const existing = this.chatsMap.get(jid);
+    const cleanJid = jid.includes(":") ? `${jid.split(":")[0]}@${jid.split("@")[1]}` : jid;
+    const existing = this.chatsMap.get(cleanJid) || this.chatsMap.get(jid);
     if (existing) {
       existing.avatarUrl = url;
-      this.chatsMap.set(jid, existing);
+      this.chatsMap.set(cleanJid, existing);
     }
-    const contact = this.contactsMap.get(jid);
+    const contact = this.contactsMap.get(cleanJid) || this.contactsMap.get(jid);
     if (contact) {
       contact.avatarUrl = url;
+      this.contactsMap.set(cleanJid, contact);
     }
     this.emit("chats", this.getChats());
   }
@@ -458,6 +470,32 @@ class WhatsAppEventBus extends EventEmitter {
     return updatedMsg;
   }
 
+  public deleteMessage(messageId: string): void {
+    if (!messageId) return;
+
+    for (const [chatJid, list] of this.messagesByChat.entries()) {
+      const filtered = list.filter((m) => m.id !== messageId);
+      if (filtered.length !== list.length) {
+        this.messagesByChat.set(chatJid, filtered);
+        const latest = filtered.length > 0 ? filtered[filtered.length - 1] : null;
+        const chat = this.chatsMap.get(chatJid);
+        if (chat) {
+          chat.lastMessage = latest?.text || (latest?.media ? `[${latest.media.type}]` : "");
+          chat.lastTimestamp = latest?.timestamp || chat.lastTimestamp;
+          this.chatsMap.set(chatJid, chat);
+          this.emit("chats", this.getChats());
+        }
+      }
+    }
+
+    const gIdx = this.allMessages.findIndex((m) => m.id === messageId);
+    if (gIdx !== -1) {
+      this.allMessages.splice(gIdx, 1);
+    }
+
+    this.emit("message_deleted", { messageId });
+  }
+
   public loadMessagesBatch(msgs: ChatMessage[]): void {
     for (const msg of msgs) {
       if (!msg || !msg.chatJid) continue;
@@ -486,6 +524,21 @@ class WhatsAppEventBus extends EventEmitter {
         this.messagesByChat.set(alias, aliasList);
       }
     }
+
+    // Populate allMessages cache
+    const allMap = new Map<string, ChatMessage>();
+    for (const m of this.allMessages) {
+      if (m?.id) allMap.set(m.id, m);
+    }
+    for (const msg of msgs) {
+      if (msg?.id) allMap.set(msg.id, msg);
+    }
+    const sorted = Array.from(allMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+    if (sorted.length > 5000) {
+      sorted.splice(0, sorted.length - 5000);
+    }
+    this.allMessages.length = 0;
+    this.allMessages.push(...sorted);
   }
 
   public getMessages(chatJid?: string): ChatMessage[] {
