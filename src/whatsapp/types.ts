@@ -58,6 +58,7 @@ export interface MediaMessageInfo {
   isVoiceNote?: boolean;
   isAnimated?: boolean;
   messageId?: string;
+  waveform?: number[];
 }
 
 export interface StatusBroadcast {
@@ -106,6 +107,7 @@ export interface ChatThread {
   creation?: number;
   restrict?: boolean;
   announce?: boolean;
+  memberAddMode?: "admin_add" | "all_member_add" | string;
   avatarUrl?: string;
   isPinned?: boolean;
   isArchived?: boolean;

@@ -362,6 +362,7 @@ export function extractMediaInfo(
       typeof (aud.fileLength as any)?.toNumber === "function"
         ? (aud.fileLength as any).toNumber()
         : Number(aud.fileLength || 0);
+    const waveform = aud.waveform && aud.waveform.length > 0 ? Array.from(aud.waveform) : undefined;
 
     return {
       type: "audio",
@@ -369,6 +370,7 @@ export function extractMediaInfo(
       seconds: aud.seconds || undefined,
       isVoiceNote: Boolean(aud.ptt),
       fileSize: fileSize || undefined,
+      waveform,
       messageId,
     };
   }

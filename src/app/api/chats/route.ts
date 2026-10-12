@@ -133,6 +133,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
+    if (action === "set_announce") {
+      await whatsappManager.setGroupAnnounce(jid, Boolean(body.announce));
+      return NextResponse.json({ success: true, announce: Boolean(body.announce) });
+    }
+
+    if (action === "set_restrict") {
+      await whatsappManager.setGroupRestrict(jid, Boolean(body.restrict));
+      return NextResponse.json({ success: true, restrict: Boolean(body.restrict) });
+    }
+
+    if (action === "set_member_add_mode") {
+      const mode = body.mode === "admin_add" ? "admin_add" : "all_member_add";
+      await whatsappManager.setGroupMemberAddMode(jid, mode);
+      return NextResponse.json({ success: true, memberAddMode: mode });
+    }
+
     if (action === "new") {
       const isGroup = jid.endsWith("@g.us");
       eventBus.upsertChat({

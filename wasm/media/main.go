@@ -183,12 +183,143 @@ func CleanPhone(this js.Value, args []js.Value) any {
 	return "+" + s
 }
 
+// GenerateWaveform generates a normalized 64-bar waveform (values 8 to 100)
+// from raw audio bytes, base64 data, opus waveform array, or duration/seed for MP3 and voice messages.
+func GenerateWaveform(this js.Value, args []js.Value) any {
+	targetBars := 64
+	if len(args) > 1 && args[1].Int() > 0 {
+		targetBars = args[1].Int()
+	}
+
+	// 1. If an array of numbers was passed (e.g. native zapo-js waveform from audioMessage)
+	if len(args) > 0 && args[0].Type() == js.TypeObject && !args[0].IsNull() && !args[0].IsUndefined() {
+		length := args[0].Length()
+		if length > 0 {
+			rawVals := make([]int, length)
+			maxVal := 1
+			for i := 0; i < length; i++ {
+				v := args[0].Index(i).Int()
+				if v < 0 {
+					v = -v
+				}
+				rawVals[i] = v
+				if v > maxVal {
+					maxVal = v
+				}
+			}
+
+			// Resample to targetBars
+			result := make([]any, targetBars)
+			for b := 0; b < targetBars; b++ {
+				origIdx := (b * length) / targetBars
+				val := rawVals[origIdx]
+				norm := int((float64(val) / float64(maxVal)) * 92.0) + 8
+				if norm > 100 {
+					norm = 100
+				}
+				if norm < 8 {
+					norm = 8
+				}
+				result[b] = norm
+			}
+			return result
+		}
+	}
+
+	// 2. If a base64 string or raw string was passed
+	if len(args) > 0 && args[0].Type() == js.TypeString {
+		raw := args[0].String()
+		if idx := strings.Index(raw, ","); idx != -1 {
+			raw = raw[idx+1:]
+		}
+		data, err := base64.StdEncoding.DecodeString(raw)
+		if err == nil && len(data) >= targetBars {
+			bars := make([]int, targetBars)
+			binSize := len(data) / targetBars
+			maxAmp := 1
+			for b := 0; b < targetBars; b++ {
+				start := b * binSize
+				end := start + binSize
+				if end > len(data) {
+					end = len(data)
+				}
+				sum := 0
+				cnt := 0
+				for i := start; i < end; i += 2 {
+					diff := int(data[i]) - 128
+					if diff < 0 {
+						diff = -diff
+					}
+					sum += diff
+					cnt++
+				}
+				if cnt > 0 {
+					avg := sum / cnt
+					bars[b] = avg
+					if avg > maxAmp {
+						maxAmp = avg
+					}
+				} else {
+					bars[b] = 10
+				}
+			}
+
+			result := make([]any, targetBars)
+			for b := 0; b < targetBars; b++ {
+				norm := int((float64(bars[b]) / float64(maxAmp)) * 92.0) + 8
+				if norm > 100 {
+					norm = 100
+				}
+				if norm < 8 {
+					norm = 8
+				}
+				result[b] = norm
+			}
+			return result
+		}
+	}
+
+	// 3. Fallback: generate natural WhatsApp voice-note curve pattern based on seed / default
+	seed := 42
+	if len(args) > 0 && args[0].Type() == js.TypeNumber {
+		seed = args[0].Int()
+		if seed == 0 {
+			seed = 42
+		}
+	}
+
+	result := make([]any, targetBars)
+	for b := 0; b < targetBars; b++ {
+		// Pseudo-random voice envelope with harmonic modulation
+		phase := float64(b) / float64(targetBars)
+		mod1 := (seed*7 + b*13) % 47
+		mod2 := (seed*3 + b*19) % 31
+		base := 20.0 + float64(mod1) + float64(mod2)
+		// Envelope dip at beginning and end
+		if phase < 0.1 {
+			base *= (phase / 0.1)
+		} else if phase > 0.9 {
+			base *= ((1.0 - phase) / 0.1)
+		}
+		norm := int(base)
+		if norm < 10 {
+			norm = 10
+		}
+		if norm > 95 {
+			norm = 95
+		}
+		result[b] = norm
+	}
+	return result
+}
+
 func main() {
 	// Register functions on JavaScript global window
 	js.Global().Set("__wasmDecodeMedia", js.FuncOf(DecodeMedia))
 	js.Global().Set("__wasmFormatAudio", js.FuncOf(FormatAudioSeconds))
 	js.Global().Set("__wasmFormatFileSize", js.FuncOf(FormatFileSize))
 	js.Global().Set("__wasmCleanPhone", js.FuncOf(CleanPhone))
+	js.Global().Set("__wasmGenerateWaveform", js.FuncOf(GenerateWaveform))
 	js.Global().Set("__wasmReady", true)
 
 	// Keep WebAssembly process running

@@ -536,6 +536,7 @@ export class WhatsAppClientManager {
             creation: creationTimestamp,
             restrict: g.restrict,
             announce: g.announce,
+            memberAddMode: (g as any).memberAddMode || undefined,
             parentGroupJid: (g as any).linkedParentJid || (g as any).parentGroupJid || undefined,
             isParentGroup: Boolean((g as any).isParentGroup),
           });
@@ -658,6 +659,7 @@ export class WhatsAppClientManager {
           creation: creationTimestamp,
           restrict: meta.restrict,
           announce: meta.announce,
+          memberAddMode: (meta as any).memberAddMode || undefined,
           parentGroupJid: (meta as any).linkedParentJid || (meta as any).parentGroupJid || undefined,
           isParentGroup: Boolean((meta as any).isParentGroup),
         });
@@ -1183,6 +1185,48 @@ export class WhatsAppClientManager {
   public async demoteParticipant(groupJid: string, participantJid: string): Promise<void> {
     if (!this.client) throw new Error("Client not initialized");
     await this.client.group.demoteParticipants(groupJid, [participantJid]);
+    await this.fetchGroupMetadata(groupJid);
+  }
+
+  /**
+   * Admin actions: Set group announce mode (only admins can send messages).
+   */
+  public async setGroupAnnounce(groupJid: string, announce: boolean): Promise<void> {
+    if (!this.client) throw new Error("Client not initialized");
+    await this.client.group.setSetting(groupJid, "announcement", announce);
+    const chat = eventBus.getChat(groupJid);
+    if (chat) {
+      chat.announce = announce;
+      eventBus.upsertChat(chat);
+    }
+    await this.fetchGroupMetadata(groupJid);
+  }
+
+  /**
+   * Admin actions: Set group restrict mode (only admins can edit group info).
+   */
+  public async setGroupRestrict(groupJid: string, restrict: boolean): Promise<void> {
+    if (!this.client) throw new Error("Client not initialized");
+    await this.client.group.setSetting(groupJid, "restrict", restrict);
+    const chat = eventBus.getChat(groupJid);
+    if (chat) {
+      chat.restrict = restrict;
+      eventBus.upsertChat(chat);
+    }
+    await this.fetchGroupMetadata(groupJid);
+  }
+
+  /**
+   * Admin actions: Set group member add mode (who can add participants).
+   */
+  public async setGroupMemberAddMode(groupJid: string, mode: "admin_add" | "all_member_add"): Promise<void> {
+    if (!this.client) throw new Error("Client not initialized");
+    await this.client.group.setMemberAddMode(groupJid, mode as any);
+    const chat = eventBus.getChat(groupJid);
+    if (chat) {
+      chat.memberAddMode = mode;
+      eventBus.upsertChat(chat);
+    }
     await this.fetchGroupMetadata(groupJid);
   }
 
