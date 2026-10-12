@@ -32,6 +32,7 @@ export interface PairingCodeData {
 export interface GroupParticipant {
   jid: string;
   name?: string;
+  pushName?: string;
   phoneNumber?: string;
   type?: "admin" | "superadmin" | "member";
   isSuperAdmin?: boolean;

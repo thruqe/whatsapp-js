@@ -389,27 +389,45 @@ export class WhatsAppClientManager {
             : Date.now();
           const owner = g.owner || undefined;
 
-          // Format participants cleanly, resolving LIDs to phone numbers
-          const cleanParticipants = g.participants?.map((p: any) => {
+          // Format participants cleanly, resolving pushnames, admins first, and alphabetical order
+          const rawParticipants: any[] = Array.isArray(g.participants) ? g.participants : [];
+          const cleanParticipants: import("./types").GroupParticipant[] = rawParticipants.map((p: any) => {
             const rawJid = p.jid || "";
             const contact = eventBus.getContact(rawJid);
-            const phoneNumber =
+            const rawPhone =
               p.phoneNumber ||
               contact?.phoneNumber ||
-              (!rawJid.endsWith("@lid") ? formatPhoneNumber(rawJid.split("@")[0]) : undefined);
-            const name =
-              contact?.displayName ||
-              contact?.pushName ||
-              (phoneNumber ? formatPhoneNumber(phoneNumber) : "~");
+              (!rawJid.endsWith("@lid") ? rawJid.split("@")[0] : undefined);
+            const formattedPhone = rawPhone ? formatPhoneNumber(rawPhone) : undefined;
+
+            const pushName = p.pushName || contact?.pushName || p.displayName || undefined;
+            const displayName = contact?.displayName || pushName;
+            const name = displayName || formattedPhone || "~";
+
+            const isAdmin = Boolean(p.isAdmin || p.type === "admin" || p.admin === "admin");
+            const isSuperAdmin = Boolean(p.isSuperAdmin || p.type === "superadmin" || p.admin === "superadmin");
 
             return {
               jid: rawJid,
               name,
-              phoneNumber,
-              type: p.type || (p.isAdmin ? "admin" : p.isSuperAdmin ? "superadmin" : "member"),
-              isAdmin: Boolean(p.isAdmin || p.type === "admin"),
-              isSuperAdmin: Boolean(p.isSuperAdmin || p.type === "superadmin"),
+              pushName,
+              phoneNumber: formattedPhone,
+              type: isSuperAdmin ? "superadmin" : isAdmin ? "admin" : "member",
+              isAdmin,
+              isSuperAdmin,
             };
+          });
+
+          // Sort admins first, then alphabetically by name/pushName
+          cleanParticipants.sort((a, b) => {
+            const aIsAdmin = Boolean(a.isSuperAdmin || a.isAdmin || a.type === "admin" || a.type === "superadmin");
+            const bIsAdmin = Boolean(b.isSuperAdmin || b.isAdmin || b.type === "admin" || b.type === "superadmin");
+            if (aIsAdmin && !bIsAdmin) return -1;
+            if (!aIsAdmin && bIsAdmin) return 1;
+
+            const nameA = (a.name || a.pushName || a.phoneNumber || "~").toLowerCase();
+            const nameB = (b.name || b.pushName || b.phoneNumber || "~").toLowerCase();
+            return nameA.localeCompare(nameB);
           });
 
           // Check if group already has messages in memory or database

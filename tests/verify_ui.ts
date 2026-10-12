@@ -24,33 +24,81 @@ async function main() {
   });
   console.log(`Wasm ready: ${wasmReady}`);
 
-  // 2. Click the first chat item in sidebar
-  const chatItem = page.locator("aside div[class*='cursor-pointer']").first();
-  if ((await chatItem.count()) > 0) {
-    console.log("Clicking first chat item...");
-    await chatItem.click();
-    await page.waitForTimeout(1000);
+  // Test country code formatting via Wasm
+  const phoneTest = await page.evaluate(() => {
+    return {
+      nigeria: (window as any).__wasmCleanPhone?.("2348062795602"),
+      ghana: (window as any).__wasmCleanPhone?.("233533763772"),
+      brazil: (window as any).__wasmCleanPhone?.("559984726662"),
+      us: (window as any).__wasmCleanPhone?.("15551234567"),
+    };
+  });
+  console.log("Phone formatting test:", phoneTest);
 
-    // Take screenshot of active chat with visible doodles
-    await page.screenshot({ path: "tests/chat_with_doodles.png" });
-    console.log("Captured tests/chat_with_doodles.png");
-
-    // Click on chat header to open Group / Chat Info drawer
-    console.log("Clicking chat header to open Group Info / Settings drawer...");
-    const chatHeaderTitle = page.locator("header h3").first();
-    await chatHeaderTitle.click();
+  // 2. Test Status tab deduplication
+  console.log("Testing Status tab...");
+  const statusTabBtn = page.locator("button:has-text('Status')").first();
+  if ((await statusTabBtn.count()) > 0) {
+    await statusTabBtn.click();
     await page.waitForTimeout(800);
 
-    await page.screenshot({ path: "tests/group_info_drawer.png" });
-    console.log("Captured tests/group_info_drawer.png");
+    const statusItems = page.locator("div[class*='cursor-pointer']:has(span.rounded-full:has-text(''))");
+    const count = await statusItems.count();
+    console.log(`Grouped status contacts count: ${count}`);
 
-    // Check right-click on chat item in sidebar
-    console.log("Triggering right-click on chat item in sidebar...");
-    await chatItem.click({ button: "right" });
+    // Capture screenshot of deduplicated status list
+    await page.screenshot({ path: "tests/status_list.png" });
+    console.log("Captured tests/status_list.png");
+
+    // Click on the first status contact to open story viewer
+    const firstStatus = page.locator("div[class*='cursor-pointer'][key*='status-group']").first();
+    if ((await firstStatus.count()) > 0) {
+      await firstStatus.click();
+      await page.waitForTimeout(800);
+      await page.screenshot({ path: "tests/status_story_viewer.png" });
+      console.log("Captured tests/status_story_viewer.png");
+
+      // Close status modal
+      const closeBtn = page.locator("div[class*='fixed'] button:has(svg.lucide-x)").first();
+      if ((await closeBtn.count()) > 0) {
+        await closeBtn.click();
+        await page.waitForTimeout(500);
+      }
+    }
+
+    // Switch back to 'all' chats tab
+    const allTabBtn = page.locator("button:has-text('All')").first();
+    await allTabBtn.click();
     await page.waitForTimeout(500);
+  }
 
-    await page.screenshot({ path: "tests/right_click_menu_new.png" });
-    console.log("Captured tests/right_click_menu_new.png");
+  // 3. Test active chat and Group Info Drawer (admins first, pushnames, phone formatting)
+  console.log("Testing group chats and drawer...");
+  const groupChat = page.locator("div[class*='cursor-pointer']:has-text('WASOCKET CHAT')").first();
+  if ((await groupChat.count()) > 0) {
+    await groupChat.click();
+  } else {
+    const firstChat = page.locator("aside div[class*='cursor-pointer']").first();
+    await firstChat.click();
+  }
+  await page.waitForTimeout(1000);
+
+  // Open Chat Info / Group Settings drawer
+  const chatHeaderTitle = page.locator("header h3").first();
+  await chatHeaderTitle.click();
+  await page.waitForTimeout(800);
+
+  await page.screenshot({ path: "tests/group_participants_drawer.png" });
+  console.log("Captured tests/group_participants_drawer.png");
+
+  // 4. Test quoted message tap-to-jump
+  const quoteBox = page.locator("div[class*='group/quote']").first();
+  if ((await quoteBox.count()) > 0) {
+    console.log("Testing quoted message click...");
+    await quoteBox.click();
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: "tests/quoted_message_jump.png" });
+    console.log("Captured tests/quoted_message_jump.png");
   }
 
   await browser.close();
@@ -58,6 +106,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Playwright test failed:", err);
+  console.error("Test failed:", err);
   process.exit(1);
 });

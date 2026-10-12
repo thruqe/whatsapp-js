@@ -1,12 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
-import { downloadMediaMessage, proto } from "zapo-js";
+import { downloadMediaMessage, proto, unwrapMessage } from "zapo-js";
+
+// In-memory cache for decrypted media files
+const mediaCache = new Map<string, { buffer: Buffer; mime: string; filename: string }>();
 
 export async function GET(req: NextRequest) {
   const messageId = req.nextUrl.searchParams.get("id");
+  const isViewInline =
+    req.nextUrl.searchParams.get("view") === "1" ||
+    req.nextUrl.searchParams.get("inline") === "1";
+
   if (!messageId) {
     return NextResponse.json({ error: "Missing message id" }, { status: 400 });
+  }
+
+  // Check cache first for rapid rendering of stickers and photos
+  const cached = mediaCache.get(messageId);
+  if (cached) {
+    return new Response(cached.buffer as any, {
+      headers: {
+        "Content-Type": cached.mime,
+        "Content-Disposition": isViewInline
+          ? "inline"
+          : `attachment; filename="${encodeURIComponent(cached.filename)}"`,
+        "Cache-Control": "public, max-age=86400, immutable",
+      },
+    });
   }
 
   const dbPath = resolve(process.cwd(), process.env.AUTH_DIR || ".auth", "state.sqlite");
@@ -27,14 +48,24 @@ export async function GET(req: NextRequest) {
     }
 
     const decoded = proto.Message.decode(row.message_bytes);
+    const unwrapped = unwrapMessage(decoded);
     const stream = await downloadMediaMessage(decoded);
 
-    const img = decoded.imageMessage;
-    const vid = decoded.videoMessage;
-    const aud = decoded.audioMessage;
-    const doc = decoded.documentMessage;
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const buffer = Buffer.concat(chunks);
+
+    const img = unwrapped.imageMessage;
+    const vid = unwrapped.videoMessage;
+    const aud = unwrapped.audioMessage;
+    const doc = unwrapped.documentMessage;
+    const stk = unwrapped.stickerMessage;
 
     const mime =
+      stk?.mimetype ||
+      (stk ? "image/webp" : undefined) ||
       img?.mimetype ||
       vid?.mimetype ||
       aud?.mimetype ||
@@ -43,7 +74,9 @@ export async function GET(req: NextRequest) {
 
     const filename =
       doc?.fileName ||
-      (img
+      (stk
+        ? `sticker-${messageId}.webp`
+        : img
         ? `photo-${messageId}.jpeg`
         : vid
         ? `video-${messageId}.mp4`
@@ -51,10 +84,20 @@ export async function GET(req: NextRequest) {
         ? `audio-${messageId}.ogg`
         : `file-${messageId}`);
 
-    return new Response(stream as any, {
+    // Cache recently downloaded media (limit to 100 items)
+    if (mediaCache.size > 100) {
+      const firstKey = mediaCache.keys().next().value;
+      if (firstKey) mediaCache.delete(firstKey);
+    }
+    mediaCache.set(messageId, { buffer, mime, filename });
+
+    return new Response(buffer as any, {
       headers: {
         "Content-Type": mime,
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+        "Content-Disposition": isViewInline
+          ? "inline"
+          : `attachment; filename="${encodeURIComponent(filename)}"`,
+        "Cache-Control": "public, max-age=86400, immutable",
       },
     });
   } catch (err) {

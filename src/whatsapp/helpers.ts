@@ -7,24 +7,132 @@ import type { proto } from "zapo-js";
 /**
  * Cleanly formats a phone number string (e.g. 2348062795602 -> +234 806 279 5602).
  */
+// Known 3-digit country calling codes
+const THREE_DIGIT_COUNTRY_CODES = new Set([
+  "211", "212", "213", "216", "218", "220", "221", "222", "223", "224", "225", "226", "227", "228", "229",
+  "230", "231", "232", "233", "234", "235", "236", "237", "238", "239", "240", "241", "242", "243", "244",
+  "245", "246", "248", "249", "250", "251", "252", "253", "254", "255", "256", "257", "258", "260", "261",
+  "262", "263", "264", "265", "266", "267", "268", "269", "290", "291", "297", "298", "299", "350", "351",
+  "352", "353", "354", "355", "356", "357", "358", "359", "370", "371", "372", "373", "374", "375", "376",
+  "377", "378", "379", "380", "381", "382", "383", "385", "386", "387", "389", "420", "421", "423", "500",
+  "501", "502", "503", "504", "505", "506", "507", "508", "509", "590", "591", "592", "593", "594", "595",
+  "596", "597", "598", "599", "670", "672", "673", "674", "675", "676", "677", "678", "679", "680", "681",
+  "682", "683", "685", "686", "687", "688", "689", "690", "691", "692", "850", "852", "853", "855", "856",
+  "880", "886", "960", "961", "962", "963", "964", "965", "966", "967", "968", "970", "971", "972", "973",
+  "974", "975", "976", "977", "992", "993", "994", "995", "996", "998"
+]);
+
+// Known 2-digit country calling codes
+const TWO_DIGIT_COUNTRY_CODES = new Set([
+  "20", "27", "30", "31", "32", "33", "34", "36", "39", "40", "41", "43", "44", "45", "46", "47", "48", "49",
+  "51", "52", "53", "54", "55", "56", "57", "58", "60", "61", "62", "63", "64", "65", "66", "81", "82", "84",
+  "86", "90", "91", "92", "93", "94", "95", "98"
+]);
+
+/**
+ * Cleanly formats a phone number string based on its international country code.
+ * e.g.:
+ *  - 2348062795602 -> +234 806 279 5602 (Nigeria)
+ *  - 15551234567   -> +1 (555) 123-4567 (US/Canada)
+ *  - 447911123456  -> +44 7911 123456 (UK)
+ *  - 559984726662  -> +55 99 98472-6662 (Brazil)
+ *  - 233533763772  -> +233 53 376 3772 (Ghana)
+ */
 export function formatPhoneNumber(input: string): string {
   if (!input) return "~";
   const digits = input.replace(/\D/g, "");
   if (!digits || digits.length < 5) return input || "~";
 
-  // Nigerian format (+234 ...)
-  if (digits.startsWith("234") && digits.length >= 13) {
-    return `+234 ${digits.slice(3, 6)} ${digits.slice(6, 9)} ${digits.slice(9)}`;
+  // Check 3-digit country codes first
+  const prefix3 = digits.slice(0, 3);
+  if (THREE_DIGIT_COUNTRY_CODES.has(prefix3) && digits.length > 5) {
+    const rest = digits.slice(3);
+    if (prefix3 === "234") {
+      // Nigeria: +234 XXX XXX XXXX
+      if (rest.length >= 10) {
+        return `+234 ${rest.slice(0, 3)} ${rest.slice(3, 6)} ${rest.slice(6)}`;
+      }
+      return `+234 ${rest.slice(0, 3)} ${rest.slice(3)}`;
+    }
+    if (prefix3 === "233") {
+      // Ghana: +233 XX XXX XXXX
+      if (rest.length >= 9) {
+        return `+233 ${rest.slice(0, 2)} ${rest.slice(2, 5)} ${rest.slice(5)}`;
+      }
+      return `+233 ${rest.slice(0, 2)} ${rest.slice(2)}`;
+    }
+    if (prefix3 === "254") {
+      // Kenya: +254 XXX XXX XXX
+      return `+254 ${rest.slice(0, 3)} ${rest.slice(3, 6)} ${rest.slice(6)}`;
+    }
+    // Generic 3-digit format
+    if (rest.length <= 6) {
+      return `+${prefix3} ${rest}`;
+    }
+    return `+${prefix3} ${rest.slice(0, 3)} ${rest.slice(3, 6)}${rest.length > 6 ? " " + rest.slice(6) : ""}`;
   }
-  // US / North America (+1 ...)
-  if (digits.startsWith("1") && digits.length === 11) {
-    return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+
+  // Check 2-digit country codes
+  const prefix2 = digits.slice(0, 2);
+  if (TWO_DIGIT_COUNTRY_CODES.has(prefix2) && digits.length > 4) {
+    const rest = digits.slice(2);
+    if (prefix2 === "44") {
+      // UK: +44 XXXX XXXXXX
+      if (rest.length >= 10) {
+        return `+44 ${rest.slice(0, 4)} ${rest.slice(4)}`;
+      }
+      return `+44 ${rest.slice(0, 3)} ${rest.slice(3)}`;
+    }
+    if (prefix2 === "55") {
+      // Brazil: +55 XX XXXXX-XXXX or +55 XX XXXX-XXXX
+      if (rest.length >= 11) {
+        return `+55 ${rest.slice(0, 2)} ${rest.slice(2, 7)}-${rest.slice(7)}`;
+      }
+      if (rest.length >= 10) {
+        return `+55 ${rest.slice(0, 2)} ${rest.slice(2, 6)}-${rest.slice(6)}`;
+      }
+      return `+55 ${rest.slice(0, 2)} ${rest.slice(2)}`;
+    }
+    if (prefix2 === "91") {
+      // India: +91 XXXXX XXXXX
+      if (rest.length >= 10) {
+        return `+91 ${rest.slice(0, 5)} ${rest.slice(5)}`;
+      }
+      return `+91 ${rest.slice(0, 4)} ${rest.slice(4)}`;
+    }
+    if (prefix2 === "33") {
+      // France: +33 X XX XX XX XX
+      if (rest.length >= 9) {
+        return `+33 ${rest.slice(0, 1)} ${rest.slice(1, 3)} ${rest.slice(3, 5)} ${rest.slice(5, 7)} ${rest.slice(7)}`;
+      }
+    }
+    if (prefix2 === "49") {
+      // Germany: +49 XXXX XXXXXXX
+      if (rest.length >= 10) {
+        return `+49 ${rest.slice(0, 4)} ${rest.slice(4)}`;
+      }
+    }
+    // Generic 2-digit format
+    if (rest.length <= 6) {
+      return `+${prefix2} ${rest}`;
+    }
+    return `+${prefix2} ${rest.slice(0, 3)} ${rest.slice(3, 6)}${rest.length > 6 ? " " + rest.slice(6) : ""}`;
   }
-  // UK (+44 ...)
-  if (digits.startsWith("44") && digits.length >= 11) {
-    return `+44 ${digits.slice(2, 6)} ${digits.slice(6)}`;
+
+  // Check 1-digit country codes: 1 (North America) & 7 (Russia/Kazakhstan)
+  if (digits.startsWith("1") && digits.length >= 10) {
+    const rest = digits.slice(1);
+    if (rest.length === 10) {
+      return `+1 (${rest.slice(0, 3)}) ${rest.slice(3, 6)}-${rest.slice(6)}`;
+    }
+    return `+1 ${rest.slice(0, 3)} ${rest.slice(3, 6)} ${rest.slice(6)}`;
   }
-  // Generic formatting
+  if (digits.startsWith("7") && digits.length >= 11) {
+    const rest = digits.slice(1);
+    return `+7 (${rest.slice(0, 3)}) ${rest.slice(3, 6)}-${rest.slice(6, 8)}-${rest.slice(8)}`;
+  }
+
+  // Fallback: generic grouping
   if (digits.length >= 10) {
     return `+${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
   }

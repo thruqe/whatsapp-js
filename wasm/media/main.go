@@ -111,15 +111,72 @@ func CleanPhone(this js.Value, args []js.Value) any {
 		return "~"
 	}
 
-	// Nigerian numbers (234...)
-	if strings.HasPrefix(s, "234") && len(s) >= 13 {
-		return fmt.Sprintf("+234 %s %s %s", s[3:6], s[6:9], s[9:])
+	// 3-digit country codes
+	threeDigitCodes := map[string]bool{
+		"211": true, "212": true, "213": true, "216": true, "218": true, "220": true, "221": true,
+		"222": true, "223": true, "224": true, "225": true, "226": true, "227": true, "228": true,
+		"229": true, "230": true, "231": true, "232": true, "233": true, "234": true, "235": true,
+		"236": true, "237": true, "238": true, "239": true, "240": true, "241": true, "242": true,
+		"243": true, "244": true, "245": true, "246": true, "248": true, "249": true, "250": true,
+		"251": true, "252": true, "253": true, "254": true, "255": true, "256": true, "257": true,
+		"258": true, "260": true, "261": true, "262": true, "263": true, "264": true, "265": true,
+		"266": true, "267": true, "268": true, "269": true, "350": true, "351": true, "352": true,
+		"353": true, "354": true, "355": true, "356": true, "357": true, "358": true, "359": true,
+		"380": true, "880": true, "966": true, "971": true, "972": true, "974": true,
 	}
-	// US / Canada (1...)
+
+	// 2-digit country codes
+	twoDigitCodes := map[string]bool{
+		"20": true, "27": true, "30": true, "31": true, "32": true, "33": true, "34": true,
+		"36": true, "39": true, "40": true, "41": true, "43": true, "44": true, "45": true,
+		"46": true, "47": true, "48": true, "49": true, "51": true, "52": true, "53": true,
+		"54": true, "55": true, "56": true, "57": true, "58": true, "60": true, "61": true,
+		"62": true, "63": true, "64": true, "65": true, "66": true, "81": true, "82": true,
+		"84": true, "86": true, "90": true, "91": true, "92": true, "93": true, "94": true,
+		"95": true, "98": true,
+	}
+
+	if len(s) >= 6 && threeDigitCodes[s[:3]] {
+		cc := s[:3]
+		rest := s[3:]
+		if cc == "234" && len(rest) >= 10 {
+			return fmt.Sprintf("+234 %s %s %s", rest[:3], rest[3:6], rest[6:])
+		}
+		if cc == "233" && len(rest) >= 9 {
+			return fmt.Sprintf("+233 %s %s %s", rest[:2], rest[2:5], rest[5:])
+		}
+		if len(rest) >= 6 {
+			return fmt.Sprintf("+%s %s %s", cc, rest[:3], rest[3:])
+		}
+		return fmt.Sprintf("+%s %s", cc, rest)
+	}
+
+	if len(s) >= 5 && twoDigitCodes[s[:2]] {
+		cc := s[:2]
+		rest := s[2:]
+		if cc == "44" && len(rest) >= 10 {
+			return fmt.Sprintf("+44 %s %s", rest[:4], rest[4:])
+		}
+		if cc == "55" && len(rest) >= 11 {
+			return fmt.Sprintf("+55 %s %s-%s", rest[:2], rest[2:7], rest[7:])
+		}
+		if cc == "91" && len(rest) >= 10 {
+			return fmt.Sprintf("+91 %s %s", rest[:5], rest[5:])
+		}
+		if len(rest) >= 6 {
+			return fmt.Sprintf("+%s %s %s", cc, rest[:3], rest[3:])
+		}
+		return fmt.Sprintf("+%s %s", cc, rest)
+	}
+
+	// 1-digit country codes
 	if strings.HasPrefix(s, "1") && len(s) == 11 {
 		return fmt.Sprintf("+1 (%s) %s-%s", s[1:4], s[4:7], s[7:])
 	}
-	// Standard E.164
+	if strings.HasPrefix(s, "7") && len(s) >= 11 {
+		return fmt.Sprintf("+7 (%s) %s-%s", s[1:4], s[4:7], s[7:])
+	}
+
 	if len(s) >= 10 {
 		return fmt.Sprintf("+%s %s %s", s[:3], s[3:6], s[6:])
 	}

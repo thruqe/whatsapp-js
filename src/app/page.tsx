@@ -61,10 +61,19 @@ interface QrData {
 interface GroupParticipant {
   jid: string;
   name?: string;
+  pushName?: string;
   phoneNumber?: string;
   type?: "admin" | "superadmin" | "member";
   isSuperAdmin?: boolean;
   isAdmin?: boolean;
+}
+
+interface ContactStatusGroup {
+  senderJid: string;
+  senderName: string;
+  avatarUrl?: string;
+  lastTimestamp: number;
+  items: StatusBroadcast[];
 }
 
 interface QuotedMessageInfo {
@@ -448,6 +457,7 @@ interface ChatBubbleProps {
   onReply: (msg: ChatMessage) => void;
   onContextMenu: (e: React.MouseEvent, msg: ChatMessage) => void;
   onMediaClick: (media: MediaMessageInfo) => void;
+  onJumpToQuoted?: (messageId: string) => void;
 }
 
 const ChatBubble = memo(function ChatBubble({
@@ -455,6 +465,7 @@ const ChatBubble = memo(function ChatBubble({
   onReply,
   onContextMenu,
   onMediaClick,
+  onJumpToQuoted,
 }: ChatBubbleProps) {
   const isMe = msg.fromMe;
   const timeStr = new Date(msg.timestamp).toLocaleTimeString([], {
@@ -464,28 +475,56 @@ const ChatBubble = memo(function ChatBubble({
 
   const downloadUrl = `/api/messages/download?id=${encodeURIComponent(msg.id)}`;
 
+  const triggerDownload = (filename?: string) => {
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    if (filename) a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const isPureSticker =
+    msg.media?.type === "sticker" &&
+    !msg.replyTo &&
+    (!msg.text || msg.text === "🎨 Sticker" || msg.text.startsWith("🎨"));
+
   return (
     <div
+      id={`msg-${msg.id}`}
       onContextMenu={(e) => onContextMenu(e, msg)}
-      className={`flex group ${isMe ? "justify-end" : "justify-start"} mb-2 px-1`}
+      className={`flex group ${isMe ? "justify-end" : "justify-start"} mb-2 px-1 transition-all duration-300`}
     >
       <div
-        className={`max-w-[85%] md:max-w-[65%] rounded-2xl p-2.5 shadow-xs relative text-sm select-text transition-all ${
-          isMe
-            ? "bg-[#eef6ff] border border-[#d6e8fc] text-slate-800 rounded-br-xs"
-            : "bg-white border border-slate-200/70 text-slate-800 rounded-bl-xs"
+        className={`max-w-[85%] md:max-w-[65%] rounded-2xl relative select-text transition-all ${
+          isPureSticker
+            ? "p-0.5 bg-transparent"
+            : isMe
+            ? "bg-[#eef6ff] border border-[#d6e8fc] text-slate-800 rounded-br-xs p-2.5 shadow-xs"
+            : "bg-white border border-slate-200/70 text-slate-800 rounded-bl-xs p-2.5 shadow-xs"
         }`}
       >
-        {!isMe && msg.isGroup && (
+        {!isMe && msg.isGroup && !isPureSticker && (
           <div className="text-[11.5px] font-semibold text-[#3390ec] mb-1 px-1">
             {msg.senderName}
           </div>
         )}
 
+        {/* Quoted Message (tap to jump) */}
         {msg.replyTo && (
-          <div className="mb-2 p-2 rounded-xl bg-slate-100/90 border-l-3 border-[#3390ec] text-xs">
-            <div className="font-semibold text-[#3390ec] text-[11px] truncate">
-              {msg.replyTo.senderName || "Contact"}
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              if (msg.replyTo?.id && onJumpToQuoted) {
+                onJumpToQuoted(msg.replyTo.id);
+              }
+            }}
+            title="Click to jump to quoted message"
+            className="mb-2 p-2 rounded-xl bg-slate-100/90 hover:bg-slate-200/90 active:scale-[0.99] border-l-3 border-[#3390ec] text-xs cursor-pointer select-none transition group/quote"
+          >
+            <div className="font-semibold text-[#3390ec] text-[11px] truncate flex items-center justify-between">
+              <span>{msg.replyTo.senderName || "Contact"}</span>
+              <Reply className="w-3 h-3 text-[#3390ec]/60 group-hover/quote:text-[#3390ec] transition" />
             </div>
             <div className="text-slate-600 line-clamp-2 text-[11px] leading-snug">
               {msg.replyTo.mediaType && (
@@ -498,36 +537,34 @@ const ChatBubble = memo(function ChatBubble({
           </div>
         )}
 
-        {/* Media: Image */}
+        {/* Media: Image (thumbnail visible, click to download) */}
         {msg.media?.type === "image" && (
           <div className="mb-1.5 rounded-xl overflow-hidden bg-slate-100 border border-slate-200/80 group/img relative">
-            {msg.media.thumbnailBase64 ? (
-              <img
-                src={`data:image/jpeg;base64,${msg.media.thumbnailBase64}`}
-                alt="Image attachment"
-                onClick={() => msg.media && onMediaClick(msg.media)}
-                className="w-full max-h-80 object-cover rounded-xl cursor-pointer transition duration-200 group-hover/img:scale-[1.01]"
-              />
-            ) : (
-              <div
-                onClick={() => msg.media && onMediaClick(msg.media)}
-                className="h-44 flex flex-col items-center justify-center bg-blue-50/50 text-[#3390ec] gap-2 cursor-pointer"
-              >
-                <ImageIcon className="w-8 h-8" />
-                <span className="text-xs font-medium">Photo attachment</span>
-              </div>
-            )}
+            <img
+              src={
+                msg.media.thumbnailBase64
+                  ? `data:image/jpeg;base64,${msg.media.thumbnailBase64}`
+                  : `/api/messages/download?id=${encodeURIComponent(msg.id)}&view=1`
+              }
+              alt="Photo attachment"
+              onClick={() => triggerDownload(`photo-${msg.id}.jpeg`)}
+              title="Click thumbnail to download photo"
+              className="w-full max-h-80 object-cover rounded-xl cursor-pointer transition duration-200 group-hover/img:scale-[1.01]"
+            />
             <div className="absolute top-2 right-2 flex items-center gap-1">
               <a
                 href={downloadUrl}
-                download
+                download={`photo-${msg.id}.jpeg`}
                 title="Download photo"
                 className="bg-black/50 hover:bg-black/70 text-white rounded-full p-1.5 transition shadow"
               >
                 <Download className="w-3.5 h-3.5" />
               </a>
               <button
-                onClick={() => msg.media && onMediaClick(msg.media)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (msg.media) onMediaClick(msg.media);
+                }}
                 title="Zoom"
                 className="bg-black/50 hover:bg-black/70 text-white rounded-full p-1.5 transition shadow"
               >
@@ -537,35 +574,32 @@ const ChatBubble = memo(function ChatBubble({
           </div>
         )}
 
-        {/* Media: Video */}
+        {/* Media: Video (thumbnail visible, click to download) */}
         {msg.media?.type === "video" && (
-          <div className="mb-1.5 rounded-xl overflow-hidden bg-slate-900 border border-slate-300 relative">
-            {msg.media.thumbnailBase64 ? (
-              <div className="relative">
-                <img
-                  src={`data:image/jpeg;base64,${msg.media.thumbnailBase64}`}
-                  alt="Video preview"
-                  className="w-full max-h-80 object-cover rounded-xl opacity-90"
-                />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <a
-                    href={downloadUrl}
-                    download
-                    className="w-12 h-12 rounded-full bg-[#3390ec]/90 flex items-center justify-center text-white shadow-lg hover:scale-105 transition"
-                  >
-                    <Play className="w-5 h-5 fill-white ml-0.5" />
-                  </a>
+          <div className="mb-1.5 rounded-xl overflow-hidden bg-slate-900 border border-slate-300 relative group/vid">
+            <div
+              className="relative cursor-pointer"
+              onClick={() => triggerDownload(`video-${msg.id}.mp4`)}
+              title="Click thumbnail to download video"
+            >
+              <img
+                src={
+                  msg.media.thumbnailBase64
+                    ? `data:image/jpeg;base64,${msg.media.thumbnailBase64}`
+                    : `/api/messages/download?id=${encodeURIComponent(msg.id)}&view=1`
+                }
+                alt="Video preview"
+                className="w-full max-h-80 object-cover rounded-xl opacity-90 transition duration-200 group-hover/vid:scale-[1.01]"
+              />
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-12 h-12 rounded-full bg-[#3390ec]/90 flex items-center justify-center text-white shadow-lg hover:scale-110 active:scale-95 transition">
+                  <Download className="w-5 h-5 ml-0.5" />
                 </div>
               </div>
-            ) : (
-              <div className="h-40 flex flex-col items-center justify-center bg-slate-800 text-slate-300 gap-2">
-                <Film className="w-8 h-8 text-[#3390ec]" />
-                <span className="text-xs">Video file</span>
-              </div>
-            )}
+            </div>
             <a
               href={downloadUrl}
-              download
+              download={`video-${msg.id}.mp4`}
               title="Download video"
               className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded-full p-1.5 transition shadow"
             >
@@ -579,11 +613,13 @@ const ChatBubble = memo(function ChatBubble({
           <div className="mb-1.5 p-2.5 rounded-xl bg-white/70 border border-slate-200 flex items-center gap-3">
             <button
               type="button"
+              onClick={() => triggerDownload(`audio-${msg.id}.ogg`)}
+              title="Click to download audio"
               className="w-10 h-10 rounded-full bg-[#3390ec] text-white flex items-center justify-center shadow-sm shrink-0 hover:bg-[#267fd9] transition"
             >
               {msg.media.isVoiceNote ? <Mic className="w-5 h-5" /> : <Play className="w-5 h-5 fill-white ml-0.5" />}
             </button>
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => triggerDownload(`audio-${msg.id}.ogg`)}>
               <div className="h-2 bg-slate-200 rounded-full w-full overflow-hidden flex items-center">
                 <div className="h-full bg-[#3390ec] w-1/3 rounded-full" />
               </div>
@@ -594,7 +630,7 @@ const ChatBubble = memo(function ChatBubble({
             </div>
             <a
               href={downloadUrl}
-              download
+              download={`audio-${msg.id}.ogg`}
               title="Download audio"
               className="p-1.5 text-slate-400 hover:text-[#3390ec] transition"
             >
@@ -605,7 +641,11 @@ const ChatBubble = memo(function ChatBubble({
 
         {/* Media: Document */}
         {msg.media?.type === "document" && (
-          <div className="mb-1.5 p-3 rounded-xl bg-white/80 border border-slate-200/90 flex items-center gap-3">
+          <div
+            onClick={() => triggerDownload(msg.media?.fileName || `document-${msg.id}`)}
+            title="Click to download document"
+            className="mb-1.5 p-3 rounded-xl bg-white/80 hover:bg-white border border-slate-200/90 flex items-center gap-3 cursor-pointer transition"
+          >
             <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center text-[#3390ec] shrink-0">
               <FileText className="w-5 h-5" />
             </div>
@@ -619,7 +659,7 @@ const ChatBubble = memo(function ChatBubble({
             </div>
             <a
               href={downloadUrl}
-              download
+              download={msg.media.fileName || `document-${msg.id}`}
               title="Download document"
               className="w-8 h-8 rounded-full bg-blue-50 hover:bg-blue-100 text-[#3390ec] flex items-center justify-center transition shrink-0"
             >
@@ -628,19 +668,25 @@ const ChatBubble = memo(function ChatBubble({
           </div>
         )}
 
-        {/* Media: Sticker */}
+        {/* Media: Sticker (Always visible sticker graphic) */}
         {msg.media?.type === "sticker" && (
-          <div className="mb-1 p-1 flex items-center justify-center">
-            {msg.media.thumbnailBase64 ? (
-              <img
-                src={`data:image/webp;base64,${msg.media.thumbnailBase64}`}
-                alt="Sticker"
-                className="w-36 h-36 object-contain"
-              />
-            ) : (
-              <div className="w-28 h-28 rounded-2xl bg-white flex flex-col items-center justify-center text-slate-500 border border-slate-200">
-                <Sticker className="w-12 h-12 text-[#3390ec] mb-1" />
-                <span className="text-[10px]">Sticker</span>
+          <div className="my-1 p-1 flex items-center justify-center relative">
+            <img
+              src={
+                msg.media.thumbnailBase64
+                  ? `data:image/webp;base64,${msg.media.thumbnailBase64}`
+                  : `/api/messages/download?id=${encodeURIComponent(msg.id)}&view=1`
+              }
+              alt="Sticker"
+              loading="lazy"
+              onClick={() => triggerDownload(`sticker-${msg.id}.webp`)}
+              title="Click to download sticker"
+              className="w-36 h-36 max-w-[144px] max-h-[144px] object-contain drop-shadow-md select-none cursor-pointer hover:scale-105 active:scale-95 transition"
+            />
+            {isPureSticker && (
+              <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-full bg-black/50 backdrop-blur-xs text-[10px] text-white flex items-center gap-0.5 select-none shadow">
+                <span>{timeStr}</span>
+                {isMe && <CheckCheck className="w-3 h-3 text-[#3390ec]" />}
               </div>
             )}
           </div>
@@ -695,9 +741,55 @@ export default function WhatsAppWebPage() {
   const [filterTab, setFilterTab] = useState<"all" | "unread" | "groups" | "archived" | "status">("all");
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [statuses, setStatuses] = useState<StatusBroadcast[]>([]);
-  const [activeStatus, setActiveStatus] = useState<StatusBroadcast | null>(null);
+  const [activeStatusGroup, setActiveStatusGroup] = useState<ContactStatusGroup | null>(null);
+  const [activeStoryIndex, setActiveStoryIndex] = useState(0);
   const [previewMedia, setPreviewMedia] = useState<MediaMessageInfo | null>(null);
   const [presences, setPresences] = useState<Record<string, { type?: string; lastSeen?: number }>>({});
+
+  // Group status updates by contact/sender so each person appears exactly once
+  const groupedStatuses = useMemo(() => {
+    const map = new Map<string, ContactStatusGroup>();
+    for (const st of statuses) {
+      const baseJid = st.senderJid ? st.senderJid.split(":")[0].replace(/@.*/, "") : st.senderName;
+      const existing = map.get(baseJid);
+      if (existing) {
+        existing.items.push(st);
+        if (st.timestamp > existing.lastTimestamp) {
+          existing.lastTimestamp = st.timestamp;
+          existing.senderName = st.senderName || existing.senderName;
+          if (st.media?.thumbnailBase64) {
+            existing.avatarUrl = `data:image/jpeg;base64,${st.media.thumbnailBase64}`;
+          }
+        }
+      } else {
+        map.set(baseJid, {
+          senderJid: st.senderJid,
+          senderName: st.senderName,
+          avatarUrl: st.media?.thumbnailBase64 ? `data:image/jpeg;base64,${st.media.thumbnailBase64}` : undefined,
+          lastTimestamp: st.timestamp,
+          items: [st],
+        });
+      }
+    }
+    const list = Array.from(map.values()).map((g) => ({
+      ...g,
+      items: g.items.sort((a, b) => a.timestamp - b.timestamp),
+    }));
+    return list.sort((a, b) => b.lastTimestamp - a.lastTimestamp);
+  }, [statuses]);
+
+  // Jump smoothly to quoted message and pulse highlight
+  const handleJumpToMessage = useCallback((messageId: string) => {
+    if (!messageId) return;
+    const elem = document.getElementById(`msg-${messageId}`);
+    if (elem) {
+      elem.scrollIntoView({ behavior: "smooth", block: "center" });
+      elem.classList.add("ring-2", "ring-[#3390ec]", "bg-blue-100/70", "rounded-2xl");
+      setTimeout(() => {
+        elem.classList.remove("ring-2", "ring-[#3390ec]", "bg-blue-100/70");
+      }, 2000);
+    }
+  }, []);
 
   // Drawer for Group Info / Chat Settings
   const [showChatInfoDrawer, setShowChatInfoDrawer] = useState(false);
@@ -1488,9 +1580,9 @@ export default function WhatsAppWebPage() {
             >
               <Radio className="w-3 h-3" />
               <span>Status</span>
-              {statuses.length > 0 && (
+              {groupedStatuses.length > 0 && (
                 <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-blue-100 text-[#3390ec] font-semibold">
-                  {statuses.length}
+                  {groupedStatuses.length}
                 </span>
               )}
             </button>
@@ -1500,7 +1592,7 @@ export default function WhatsAppWebPage() {
         {/* Chats & Status List */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100 scrollbar-thin">
           {filterTab === "status" ? (
-            statuses.length === 0 ? (
+            groupedStatuses.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-center text-slate-400 px-4">
                 <Radio className="w-8 h-8 stroke-1 mb-2 text-[#3390ec]/60" />
                 <p className="text-xs font-medium">No status updates yet.</p>
@@ -1508,41 +1600,51 @@ export default function WhatsAppWebPage() {
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
-                <div className="px-4 py-2 bg-blue-50/50 text-[11px] font-bold text-[#3390ec] uppercase tracking-wider">
-                  Recent Status Updates ({statuses.length})
+                <div className="px-4 py-2 bg-blue-50/50 text-[11px] font-bold text-[#3390ec] uppercase tracking-wider flex items-center justify-between">
+                  <span>Recent Status Updates ({groupedStatuses.length})</span>
+                  <span className="text-[10px] text-slate-400 font-normal lowercase">{statuses.length} total stories</span>
                 </div>
-                {statuses.map((st) => (
-                  <div
-                    key={`status-${st.id}`}
-                    onClick={() => setActiveStatus(st)}
-                    className="flex items-center px-4 py-3 cursor-pointer hover:bg-[#f4f6f8] transition"
-                  >
-                    <div className="relative shrink-0">
-                      <div className="w-12 h-12 rounded-full p-[2.5px] bg-gradient-to-tr from-[#3390ec] to-[#267fd9]">
-                        <Avatar name={st.senderName} avatarUrl={st.media?.thumbnailBase64 ? `data:image/jpeg;base64,${st.media.thumbnailBase64}` : undefined} size="md" />
+                {groupedStatuses.map((group) => {
+                  const latestItem = group.items[group.items.length - 1];
+                  return (
+                    <div
+                      key={`status-group-${group.senderJid}`}
+                      onClick={() => {
+                        setActiveStatusGroup(group);
+                        setActiveStoryIndex(0);
+                      }}
+                      className="flex items-center px-4 py-3 cursor-pointer hover:bg-[#f4f6f8] transition"
+                    >
+                      <div className="relative shrink-0">
+                        <div className="w-12 h-12 rounded-full p-[2.5px] bg-gradient-to-tr from-[#3390ec] to-[#267fd9]">
+                          <Avatar name={group.senderName} avatarUrl={group.avatarUrl} size="md" />
+                        </div>
+                        <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-[#3390ec] border-2 border-white flex items-center justify-center">
+                          <Radio className="w-2 h-2 text-white" />
+                        </span>
                       </div>
-                      <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-[#3390ec] border-2 border-white flex items-center justify-center">
-                        <Radio className="w-2 h-2 text-white" />
-                      </span>
-                    </div>
 
-                    <div className="ml-3.5 flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-semibold text-slate-800 truncate">
-                          {st.senderName}
-                        </span>
-                        <span className="text-[11px] text-slate-400 font-mono">
-                          {formatChatTime(st.timestamp)}
-                        </span>
+                      <div className="ml-3.5 flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-semibold text-slate-800 truncate">
+                            {group.senderName}
+                          </span>
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            {formatChatTime(group.lastTimestamp)}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 truncate flex items-center gap-1">
+                          {latestItem.media?.type === "image" && <ImageIcon className="w-3.5 h-3.5 text-[#3390ec]" />}
+                          {latestItem.media?.type === "video" && <Video className="w-3.5 h-3.5 text-[#3390ec]" />}
+                          <span>
+                            {group.items.length > 1 ? `${group.items.length} updates • ` : ""}
+                            {latestItem.text || (latestItem.media ? `${latestItem.media.type}` : "Status update")}
+                          </span>
+                        </p>
                       </div>
-                      <p className="text-xs text-slate-500 truncate flex items-center gap-1">
-                        {st.media?.type === "image" && <ImageIcon className="w-3.5 h-3.5 text-[#3390ec]" />}
-                        {st.media?.type === "video" && <Video className="w-3.5 h-3.5 text-[#3390ec]" />}
-                        <span>{st.text || (st.media ? `${st.media.type}` : "Status update")}</span>
-                      </p>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )
           ) : filteredChats.length === 0 ? (
@@ -1741,6 +1843,7 @@ export default function WhatsAppWebPage() {
                         onReply={(target) => setReplyingTo(target)}
                         onContextMenu={handleMessageContextMenu}
                         onMediaClick={(media) => setPreviewMedia(media)}
+                        onJumpToQuoted={handleJumpToMessage}
                       />
                     );
                   })
@@ -1843,32 +1946,70 @@ export default function WhatsAppWebPage() {
                       <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
                         Participants ({activeChat.participants.length})
                       </span>
-                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                        {activeChat.participants.map((p, idx) => (
-                          <div
-                            key={`part-${p.jid}-${idx}`}
-                            className="flex items-center justify-between py-1.5 px-2 hover:bg-slate-50 rounded-xl"
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <Avatar name={p.name || "~"} size="sm" />
-                              <div className="min-w-0">
-                                <span className="text-xs font-medium text-slate-800 block truncate">
-                                  {p.name && p.name !== "~" ? p.name : p.phoneNumber ? p.phoneNumber : "~"}
-                                </span>
-                                {p.phoneNumber && p.name && p.name !== p.phoneNumber && (
-                                  <span className="text-[10px] text-slate-400 block truncate font-mono">
-                                    {p.phoneNumber}
+                      <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1 scrollbar-thin">
+                        {[...activeChat.participants]
+                          .sort((a, b) => {
+                            const aIsAdmin = Boolean(
+                              a.isAdmin || a.isSuperAdmin || a.type === "admin" || a.type === "superadmin"
+                            );
+                            const bIsAdmin = Boolean(
+                              b.isAdmin || b.isSuperAdmin || b.type === "admin" || b.type === "superadmin"
+                            );
+                            if (aIsAdmin && !bIsAdmin) return -1;
+                            if (!aIsAdmin && bIsAdmin) return 1;
+
+                            const nameA = (a.name || a.pushName || a.phoneNumber || "~").toLowerCase();
+                            const nameB = (b.name || b.pushName || b.phoneNumber || "~").toLowerCase();
+                            return nameA.localeCompare(nameB);
+                          })
+                          .map((p, idx) => {
+                            const formattedPhone = p.phoneNumber
+                              ? cleanPhoneWasm(p.phoneNumber)
+                              : undefined;
+                            const displayName =
+                              p.name && p.name !== "~"
+                                ? p.name
+                                : p.pushName || formattedPhone || "~";
+                            const isAdm = Boolean(
+                              p.isAdmin || p.type === "admin" || p.isSuperAdmin || p.type === "superadmin"
+                            );
+                            const isCreator = Boolean(
+                              p.isSuperAdmin || p.type === "superadmin"
+                            );
+
+                            return (
+                              <div
+                                key={`part-${p.jid}-${idx}`}
+                                className="flex items-center justify-between py-2 px-2.5 hover:bg-slate-50 rounded-xl transition"
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <Avatar name={displayName} size="sm" />
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-xs font-semibold text-slate-800 block truncate">
+                                        {displayName}
+                                      </span>
+                                      {p.pushName && p.name && p.name !== p.pushName && (
+                                        <span className="text-[10px] text-slate-400 truncate">
+                                          ~{p.pushName}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {formattedPhone && displayName !== formattedPhone && (
+                                      <span className="text-[10.5px] text-slate-500 block truncate font-mono">
+                                        {formattedPhone}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                {isAdm ? (
+                                  <span className="text-[10px] bg-blue-50 text-[#3390ec] font-semibold px-2 py-0.5 rounded-full border border-blue-200 shrink-0">
+                                    {isCreator ? "Creator" : "Admin"}
                                   </span>
-                                )}
+                                ) : null}
                               </div>
-                            </div>
-                            {p.isAdmin || p.type === "admin" || p.isSuperAdmin || p.type === "superadmin" ? (
-                              <span className="text-[10px] bg-blue-50 text-[#3390ec] font-semibold px-2 py-0.5 rounded-full border border-blue-200">
-                                {p.isSuperAdmin || p.type === "superadmin" ? "Creator" : "Admin"}
-                              </span>
-                            ) : null}
-                          </div>
-                        ))}
+                            );
+                          })}
                       </div>
                     </div>
                   )}
@@ -2161,39 +2302,101 @@ export default function WhatsAppWebPage() {
       {/* ===================================================================
           MODAL 3: STATUS STORY VIEWER MODAL
           =================================================================== */}
-      {activeStatus && (
+      {activeStatusGroup && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
           <div className="relative max-w-md w-full h-[80vh] max-h-[640px] bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden flex flex-col shadow-2xl">
-            <div className="absolute top-0 inset-x-0 z-20 p-4 bg-gradient-to-b from-black/80 to-transparent flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Avatar
-                  name={activeStatus.senderName}
-                  avatarUrl={activeStatus.media?.thumbnailBase64 ? `data:image/jpeg;base64,${activeStatus.media.thumbnailBase64}` : undefined}
-                  size="md"
-                />
-                <div>
-                  <h4 className="text-sm font-semibold text-white leading-tight">
-                    {activeStatus.senderName}
-                  </h4>
-                  <span className="text-[11px] text-slate-300">
-                    {formatChatTime(activeStatus.timestamp)}
-                  </span>
-                </div>
+            {/* Top Bar with Segments & Profile Header */}
+            <div className="absolute top-0 inset-x-0 z-20 p-4 bg-gradient-to-b from-black/80 to-transparent">
+              {/* Story progress segments */}
+              <div className="flex gap-1.5 w-full mb-3">
+                {activeStatusGroup.items.map((_, idx) => (
+                  <div
+                    key={`seg-${idx}`}
+                    className={`h-1 flex-1 rounded-full transition-all duration-300 ${
+                      idx === activeStoryIndex
+                        ? "bg-[#3390ec]"
+                        : idx < activeStoryIndex
+                        ? "bg-white/80"
+                        : "bg-white/20"
+                    }`}
+                  />
+                ))}
               </div>
 
-              <button
-                onClick={() => setActiveStatus(null)}
-                className="p-2 rounded-full bg-black/40 hover:bg-black/60 text-white transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Avatar
+                    name={activeStatusGroup.senderName}
+                    avatarUrl={
+                      activeStatusGroup.items[activeStoryIndex]?.media?.thumbnailBase64
+                        ? `data:image/jpeg;base64,${activeStatusGroup.items[activeStoryIndex].media.thumbnailBase64}`
+                        : activeStatusGroup.avatarUrl
+                    }
+                    size="md"
+                  />
+                  <div>
+                    <h4 className="text-sm font-semibold text-white leading-tight">
+                      {activeStatusGroup.senderName}
+                    </h4>
+                    <span className="text-[11px] text-slate-300">
+                      {formatChatTime(
+                        activeStatusGroup.items[activeStoryIndex]?.timestamp ||
+                          activeStatusGroup.lastTimestamp
+                      )}
+                      {activeStatusGroup.items.length > 1 && (
+                        <span className="ml-2 text-slate-400">
+                          ({activeStoryIndex + 1} of {activeStatusGroup.items.length})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setActiveStatusGroup(null)}
+                  className="p-2 rounded-full bg-black/40 hover:bg-black/60 text-white transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
+            {/* Story Content & Controls */}
             <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-slate-900 to-slate-950 relative">
-              {activeStatus.media?.thumbnailBase64 ? (
+              {/* Previous story button */}
+              {activeStoryIndex > 0 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveStoryIndex((prev) => Math.max(0, prev - 1));
+                  }}
+                  className="absolute left-3 z-30 p-2 rounded-full bg-black/50 hover:bg-black/80 text-white transition shadow"
+                  title="Previous story"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+              )}
+
+              {/* Next story button */}
+              {activeStoryIndex < activeStatusGroup.items.length - 1 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveStoryIndex((prev) =>
+                      Math.min(activeStatusGroup.items.length - 1, prev + 1)
+                    );
+                  }}
+                  className="absolute right-3 z-30 p-2 rounded-full bg-black/50 hover:bg-black/80 text-white transition shadow"
+                  title="Next story"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              )}
+
+              {activeStatusGroup.items[activeStoryIndex]?.media?.thumbnailBase64 ? (
                 <div className="w-full h-full max-h-[460px] flex items-center justify-center">
                   <img
-                    src={`data:image/jpeg;base64,${activeStatus.media.thumbnailBase64}`}
+                    src={`data:image/jpeg;base64,${activeStatusGroup.items[activeStoryIndex].media.thumbnailBase64}`}
                     alt="Status media"
                     className="max-h-full max-w-full rounded-2xl object-contain shadow-2xl"
                   />
@@ -2204,17 +2407,18 @@ export default function WhatsAppWebPage() {
                     <Radio className="w-8 h-8" />
                   </div>
                   <p className="text-lg text-slate-100 font-light leading-relaxed">
-                    {activeStatus.text || "Status update"}
+                    {activeStatusGroup.items[activeStoryIndex]?.text || "Status update"}
                   </p>
                 </div>
               )}
             </div>
 
-            {activeStatus.media?.thumbnailBase64 && activeStatus.text && (
-              <div className="p-4 bg-black/80 text-center text-sm text-slate-200 border-t border-white/10">
-                {activeStatus.text}
-              </div>
-            )}
+            {activeStatusGroup.items[activeStoryIndex]?.media?.thumbnailBase64 &&
+              activeStatusGroup.items[activeStoryIndex]?.text && (
+                <div className="p-4 bg-black/80 text-center text-sm text-slate-200 border-t border-white/10">
+                  {activeStatusGroup.items[activeStoryIndex].text}
+                </div>
+              )}
           </div>
         </div>
       )}

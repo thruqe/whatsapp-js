@@ -49,13 +49,48 @@ class WhatsAppEventBus extends EventEmitter {
   public saveContact(c: ContactRecord): void {
     if (c.jid) this.contactsMap.set(c.jid, c);
     if (c.lid) this.contactsMap.set(c.lid, c);
-    if (c.phoneNumber) this.contactsMap.set(c.phoneNumber, c);
+    if (c.phoneNumber) {
+      this.contactsMap.set(c.phoneNumber, c);
+      const digits = c.phoneNumber.replace(/\D/g, "");
+      if (digits) {
+        this.contactsMap.set(digits, c);
+        this.contactsMap.set(`${digits}@s.whatsapp.net`, c);
+      }
+    }
+    if (c.jid) {
+      const [u] = c.jid.split("@");
+      const digits = u.replace(/\D/g, "");
+      if (digits && digits.length >= 7) {
+        this.contactsMap.set(digits, c);
+      }
+    }
     if (c.jid && c.phoneNumber) this.registerAlias(c.jid, c.phoneNumber);
     if (c.lid && c.phoneNumber) this.registerAlias(c.lid, c.phoneNumber);
+    if (c.jid && c.lid) this.registerAlias(c.jid, c.lid);
   }
 
   public getContact(jidOrLid: string): ContactRecord | undefined {
-    return this.contactsMap.get(jidOrLid);
+    if (!jidOrLid) return undefined;
+    const direct = this.contactsMap.get(jidOrLid);
+    if (direct) return direct;
+
+    const alias = this.aliasMap.get(jidOrLid);
+    if (alias) {
+      const aliased = this.contactsMap.get(alias);
+      if (aliased) return aliased;
+    }
+
+    const digits = jidOrLid.replace(/\D/g, "");
+    if (digits) {
+      const byDigits = this.contactsMap.get(digits);
+      if (byDigits) return byDigits;
+      const byJid = this.contactsMap.get(`${digits}@s.whatsapp.net`);
+      if (byJid) return byJid;
+      const byLid = this.contactsMap.get(`${digits}@lid`);
+      if (byLid) return byLid;
+    }
+
+    return undefined;
   }
 
   public setProfilePicture(jid: string, url: string): void {
