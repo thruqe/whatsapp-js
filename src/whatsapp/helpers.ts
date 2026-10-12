@@ -198,6 +198,19 @@ export function extractIncomingText(
     if (edited) return edited;
   }
 
+  if (message.pollCreationMessage || message.pollCreationMessageV2 || message.pollCreationMessageV3 || message.pollCreationMessageV6) {
+    const poll = message.pollCreationMessage || message.pollCreationMessageV2 || message.pollCreationMessageV3 || message.pollCreationMessageV6;
+    return `📊 Poll: ${poll?.name || "Poll"}`;
+  }
+
+  if (message.eventMessage) {
+    return `📅 Event: ${message.eventMessage.name || "Event"}`;
+  }
+
+  if (message.call || (message as any).callLogMesssage || (message as any).scheduledCallCreationMessage) {
+    return "📞 WhatsApp Call";
+  }
+
   const imageCaption = message.imageMessage?.caption;
   if (typeof imageCaption === "string" && imageCaption.length > 0) {
     return imageCaption;
@@ -246,6 +259,51 @@ export function extractIncomingText(
   }
 
   return undefined;
+}
+
+/**
+ * Extracts Poll information from a message.
+ */
+export function extractPollInfo(
+  message: proto.IMessage | null | undefined
+): import("./types").PollMessageInfo | undefined {
+  if (!message) return undefined;
+  const poll =
+    message.pollCreationMessage ||
+    message.pollCreationMessageV2 ||
+    message.pollCreationMessageV3 ||
+    message.pollCreationMessageV6;
+  if (!poll || !poll.name) return undefined;
+
+  const rawOptions = (poll.options || []) as Array<{ optionName?: string; name?: string }>;
+  const options = rawOptions.map((opt) => ({
+    name: opt.optionName || opt.name || "Option",
+    votesCount: 0,
+  }));
+
+  return {
+    name: poll.name,
+    options,
+    selectableCount: (poll as any).selectableOptionsCount ?? 1,
+  };
+}
+
+/**
+ * Extracts Event information from a message.
+ */
+export function extractEventInfo(
+  message: proto.IMessage | null | undefined
+): import("./types").EventMessageInfo | undefined {
+  if (!message || !message.eventMessage) return undefined;
+  const ev = message.eventMessage;
+  return {
+    name: ev.name || "Event",
+    description: ev.description || undefined,
+    startTime: ev.startTime ? Number(ev.startTime) * 1000 : undefined,
+    endTime: ev.endTime ? Number(ev.endTime) * 1000 : undefined,
+    locationName: ev.location?.name || ev.location?.address || undefined,
+    isCanceled: Boolean(ev.isCanceled),
+  };
 }
 
 /**

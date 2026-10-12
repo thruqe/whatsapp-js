@@ -223,13 +223,20 @@ class WhatsAppEventBus extends EventEmitter {
         isPinned: chat.isPinned !== undefined ? chat.isPinned : existing.isPinned,
         isArchived: chat.isArchived !== undefined ? chat.isArchived : existing.isArchived,
         isBlocked: chat.isBlocked !== undefined ? chat.isBlocked : existing.isBlocked,
+        isMuted: chat.isMuted !== undefined ? chat.isMuted : existing.isMuted,
+        phoneNumber: chat.phoneNumber ?? existing.phoneNumber,
+        parentGroupJid: chat.parentGroupJid ?? existing.parentGroupJid,
+        isParentGroup: chat.isParentGroup !== undefined ? chat.isParentGroup : existing.isParentGroup,
+        subgroupsCount: chat.subgroupsCount ?? existing.subgroupsCount,
       });
     } else {
+      const contact = this.getContact(chat.jid);
       this.chatsMap.set(chat.jid, {
         ...chat,
         lastMessage: finalLastMessage || "",
         lastTimestamp: finalLastTimestamp || Date.now(),
         isBlocked: this.blockedJids.has(chat.jid),
+        phoneNumber: chat.phoneNumber || contact?.phoneNumber,
       });
     }
     this.emit("chats", this.getChats());
@@ -295,6 +302,33 @@ class WhatsAppEventBus extends EventEmitter {
       this.chatsMap.set(chatJid, chat);
       this.emit("chats", this.getChats());
     }
+  }
+
+  public setChatMuted(chatJid: string, muted: boolean): void {
+    if (!chatJid) return;
+    const chat = this.chatsMap.get(chatJid);
+    if (chat) {
+      chat.isMuted = muted;
+      this.chatsMap.set(chatJid, chat);
+      this.emit("chats", this.getChats());
+    }
+  }
+
+  public getAllContacts(): ContactRecord[] {
+    const unique = new Map<string, ContactRecord>();
+    for (const [key, c] of this.contactsMap.entries()) {
+      if (c && c.jid && !c.jid.endsWith("@g.us") && !c.jid.endsWith("@newsletter") && c.jid !== "status@broadcast") {
+        const canonical = c.phoneNumber || (!c.jid.endsWith("@lid") ? c.jid : c.lid || c.jid);
+        if (!unique.has(canonical)) {
+          unique.set(canonical, c);
+        }
+      }
+    }
+    return Array.from(unique.values()).sort((a, b) => {
+      const nameA = (a.displayName || a.pushName || a.phoneNumber || "~").toLowerCase();
+      const nameB = (b.displayName || b.pushName || b.phoneNumber || "~").toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
   }
 
   public setChatBlocked(chatJid: string, blocked: boolean): void {
@@ -375,6 +409,53 @@ class WhatsAppEventBus extends EventEmitter {
     }
 
     this.emit("message", msg);
+  }
+
+  public updateMessage(messageId: string, newText: string, isEdited: boolean = true): ChatMessage | null {
+    if (!messageId) return null;
+
+    let updatedMsg: ChatMessage | null = null;
+
+    // 1. Search and update in messagesByChat
+    for (const [chatJid, list] of this.messagesByChat.entries()) {
+      const idx = list.findIndex((m) => m.id === messageId);
+      if (idx !== -1) {
+        list[idx] = {
+          ...list[idx],
+          text: newText,
+          isEdited,
+        };
+        updatedMsg = list[idx];
+
+        // If it was the latest message in this chat, update chat preview
+        if (idx === list.length - 1) {
+          const chat = this.chatsMap.get(chatJid);
+          if (chat) {
+            chat.lastMessage = newText;
+            this.chatsMap.set(chatJid, chat);
+            this.emit("chats", this.getChats());
+          }
+        }
+      }
+    }
+
+    // 2. Search and update in allMessages
+    const gIdx = this.allMessages.findIndex((m) => m.id === messageId);
+    if (gIdx !== -1) {
+      this.allMessages[gIdx] = {
+        ...this.allMessages[gIdx],
+        text: newText,
+        isEdited,
+      };
+      if (!updatedMsg) updatedMsg = this.allMessages[gIdx];
+    }
+
+    if (updatedMsg) {
+      this.emit("message_edited", updatedMsg);
+      this.emit("message", updatedMsg);
+    }
+
+    return updatedMsg;
   }
 
   public loadMessagesBatch(msgs: ChatMessage[]): void {

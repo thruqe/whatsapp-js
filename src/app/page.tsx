@@ -6,13 +6,19 @@ import {
   Archive,
   ArchiveRestore,
   Ban,
+  BarChart2,
+  Bell,
+  BellOff,
+  Calendar,
   Check,
   CheckCheck,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   Copy,
   Download,
+  Edit2,
   FileText,
   Film,
   Headphones,
@@ -27,9 +33,11 @@ import {
   MoreVertical,
   Paperclip,
   Phone,
+  PhoneCall,
   Pin,
   PinOff,
   Play,
+  Plus,
   Radio,
   RefreshCw,
   Reply,
@@ -42,6 +50,7 @@ import {
   Trash2,
   User,
   UserCheck,
+  UserPlus,
   UserX,
   Users,
   Video,
@@ -124,6 +133,11 @@ interface ChatThread {
   isPinned?: boolean;
   isArchived?: boolean;
   isBlocked?: boolean;
+  isMuted?: boolean;
+  phoneNumber?: string;
+  parentGroupJid?: string;
+  isParentGroup?: boolean;
+  subgroupsCount?: number;
 }
 
 interface ChatMessage {
@@ -139,6 +153,24 @@ interface ChatMessage {
   media?: MediaMessageInfo;
   replyTo?: QuotedMessageInfo;
   reaction?: string;
+  isEdited?: boolean;
+  poll?: {
+    name: string;
+    options: Array<{ name: string; votesCount?: number }>;
+    selectableCount?: number;
+  };
+  event?: {
+    name: string;
+    description?: string;
+    startTime?: number;
+    endTime?: number;
+    locationName?: string;
+    isCanceled?: boolean;
+  };
+  call?: {
+    isVideo?: boolean;
+    status?: string;
+  };
 }
 
 interface UserProfile {
@@ -149,14 +181,29 @@ interface UserProfile {
   avatarUrl?: string;
 }
 
+interface ContactRecord {
+  jid: string;
+  name?: string;
+  pushName?: string;
+  phoneNumber?: string;
+}
+
 interface ContextMenuState {
   visible: boolean;
   x: number;
   y: number;
-  type: "chat" | "message";
+  type: "chat" | "message" | "participant";
   targetChat?: ChatThread;
   targetMessage?: ChatMessage;
+  targetParticipant?: GroupParticipant;
 }
+
+const POPULAR_EXTENDED_EMOJIS = [
+  "🔥", "👏", "🎉", "🙏", "😍", "🤝",
+  "💯", "🚀", "✨", "👀", "🫡", "💔",
+  "🤔", "😴", "🥳", "😭", "🤯", "🥰",
+  "🤩", "💪", "💡", "☕", "🍕", "🌈",
+];
 
 // Telegram Vibrant Gradient Colors for Letter Avatars
 const TELEGRAM_GRADIENTS = [
@@ -181,8 +228,13 @@ function getAvatarGradient(str: string): string {
 
 function getAvatarInitial(name: string): string {
   if (!name || name === "~") return "?";
-  const clean = name.trim().replace(/^[^a-zA-Z0-9]+/, "");
-  if (!clean) return name.slice(0, 1).toUpperCase();
+  // If the name is basically digits / phone number, don't use numbers as avatar initial
+  const cleanDigits = name.replace(/\D/g, "");
+  if (cleanDigits.length >= 7 && (name.startsWith("+") || !/[a-zA-Z]/.test(name))) {
+    return "👤";
+  }
+  const clean = name.trim().replace(/^[^a-zA-Z]+/, "");
+  if (!clean) return "👤";
   return clean.slice(0, 1).toUpperCase();
 }
 
@@ -363,31 +415,181 @@ const Avatar = memo(function Avatar({ name, avatarUrl, size = "md", isGroup }: A
    ========================================================================= */
 interface MessageComposerProps {
   replyingTo: ChatMessage | null;
+  editingMessage: ChatMessage | null;
   onCancelReply: () => void;
+  onCancelEdit: () => void;
   onSend: (text: string) => void;
+  onSendMedia: (file: File, caption?: string) => void;
+  onOpenPollModal: () => void;
+  onOpenEventModal: () => void;
   isSending: boolean;
 }
 
+// Telegram-style Animated/Expressive Emojis
+const POPULAR_EMOJIS = [
+  "😀", "😂", "😍", "🥳", "😎", "🔥", "👍", "❤️", "🎉", "✨",
+  "🙌", "🤔", "👀", "🚀", "💡", "💯", "😴", "😭", "🤯", "🥰",
+  "🙏", "🤩", "😜", "👋", "👏", "💪", "🌈", "⭐", "🍕", "☕"
+];
+
 const MessageComposer = memo(function MessageComposer({
   replyingTo,
+  editingMessage,
   onCancelReply,
+  onCancelEdit,
   onSend,
+  onSendMedia,
+  onOpenPollModal,
+  onOpenEventModal,
   isSending,
 }: MessageComposerProps) {
   const [text, setText] = useState("");
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync editing text if editingMessage changes
+  useEffect(() => {
+    if (editingMessage) {
+      setText(editingMessage.text || "");
+      inputRef.current?.focus();
+    }
+  }, [editingMessage]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim() || isSending) return;
     onSend(text.trim());
     setText("");
+    setShowEmojiPicker(false);
+    setShowAttachMenu(false);
     inputRef.current?.focus();
   };
 
+  const handleSelectEmoji = (emoji: string) => {
+    setText((prev) => prev + emoji);
+    inputRef.current?.focus();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      onSendMedia(file);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setShowAttachMenu(false);
+    }
+  };
+
   return (
-    <div className="bg-white border-t border-slate-200 shrink-0">
-      {replyingTo && (
+    <div className="bg-white border-t border-slate-200 shrink-0 relative">
+      {/* Hidden File Input for Attachments */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
+      {/* Emoji Picker Popup with animated bounce */}
+      {showEmojiPicker && (
+        <div className="absolute bottom-16 left-4 z-40 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-2xl p-3 w-72 animate-in fade-in-50 zoom-in-95">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+            <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Expressive Emojis</span>
+            <button
+              onClick={() => setShowEmojiPicker(false)}
+              className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="grid grid-cols-6 gap-2 max-h-48 overflow-y-auto p-1">
+            {POPULAR_EMOJIS.map((emoji, idx) => (
+              <button
+                key={`emoji-${idx}`}
+                type="button"
+                onClick={() => handleSelectEmoji(emoji)}
+                className="w-9 h-9 text-xl flex items-center justify-center rounded-xl hover:bg-blue-50 hover:scale-125 active:scale-95 transition transform duration-150"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Attachment Popover Menu */}
+      {showAttachMenu && (
+        <div className="absolute bottom-16 left-12 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-2 w-52 animate-in fade-in-50 zoom-in-95 text-xs text-slate-700">
+          <button
+            type="button"
+            onClick={() => {
+              setShowAttachMenu(false);
+              fileInputRef.current?.click();
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-100 flex items-center gap-3 transition"
+          >
+            <ImageIcon className="w-4 h-4 text-emerald-500" /> Photos & Videos
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowAttachMenu(false);
+              fileInputRef.current?.click();
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-100 flex items-center gap-3 transition"
+          >
+            <FileText className="w-4 h-4 text-[#3390ec]" /> Document
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowAttachMenu(false);
+              onOpenPollModal();
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-100 flex items-center gap-3 transition"
+          >
+            <BarChart2 className="w-4 h-4 text-amber-500" /> Create Poll
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowAttachMenu(false);
+              onOpenEventModal();
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-100 flex items-center gap-3 transition"
+          >
+            <Calendar className="w-4 h-4 text-indigo-500" /> Create Event
+          </button>
+        </div>
+      )}
+
+      {/* Edit Mode Banner */}
+      {editingMessage && (
+        <div className="bg-[#f0f9ff] border-b border-sky-100 px-4 py-2 flex items-center justify-between text-xs animate-in slide-in-from-bottom-1">
+          <div className="flex items-start gap-2.5 min-w-0 border-l-3 border-[#3390ec] pl-2.5">
+            <Edit2 className="w-4 h-4 text-[#3390ec] mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <span className="font-semibold text-[#3390ec] block truncate">
+                Editing message
+              </span>
+              <span className="text-slate-600 line-clamp-1 text-[11px]">
+                {editingMessage.text}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={onCancelEdit}
+            className="p-1 rounded-full hover:bg-sky-100 text-slate-500 hover:text-slate-700 transition"
+            title="Cancel edit"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Reply Mode Banner */}
+      {!editingMessage && replyingTo && (
         <div className="bg-[#f0f7ff] border-b border-blue-100 px-4 py-2 flex items-center justify-between text-xs animate-in slide-in-from-bottom-1">
           <div className="flex items-start gap-2.5 min-w-0 border-l-3 border-[#3390ec] pl-2.5">
             <Reply className="w-4 h-4 text-[#3390ec] mt-0.5 shrink-0" />
@@ -413,15 +615,27 @@ const MessageComposer = memo(function MessageComposer({
       <footer className="h-16 px-4 flex items-center gap-2">
         <button
           type="button"
-          className="text-slate-500 hover:text-[#3390ec] transition p-2 rounded-full hover:bg-slate-100"
-          title="Emoji"
+          onClick={() => {
+            setShowEmojiPicker((p) => !p);
+            setShowAttachMenu(false);
+          }}
+          className={`p-2 rounded-full transition ${
+            showEmojiPicker ? "text-[#3390ec] bg-blue-50" : "text-slate-500 hover:text-[#3390ec] hover:bg-slate-100"
+          }`}
+          title="Emojis"
         >
           <Smile className="w-5 h-5" />
         </button>
         <button
           type="button"
-          className="text-slate-500 hover:text-[#3390ec] transition p-2 rounded-full hover:bg-slate-100"
-          title="Attach"
+          onClick={() => {
+            setShowAttachMenu((p) => !p);
+            setShowEmojiPicker(false);
+          }}
+          className={`p-2 rounded-full transition ${
+            showAttachMenu ? "text-[#3390ec] bg-blue-50" : "text-slate-500 hover:text-[#3390ec] hover:bg-slate-100"
+          }`}
+          title="Attach media or poll"
         >
           <Paperclip className="w-5 h-5" />
         </button>
@@ -430,7 +644,13 @@ const MessageComposer = memo(function MessageComposer({
           <input
             ref={inputRef}
             type="text"
-            placeholder={replyingTo ? `Reply to ${replyingTo.senderName}...` : "Write a message..."}
+            placeholder={
+              editingMessage
+                ? "Edit your message..."
+                : replyingTo
+                ? `Reply to ${replyingTo.senderName}...`
+                : "Write a message..."
+            }
             value={text}
             onChange={(e) => setText(e.target.value)}
             className="flex-1 bg-[#f4f6f8] focus:bg-white text-slate-900 placeholder-slate-400 text-sm rounded-full px-5 py-2.5 border border-transparent focus:border-[#3390ec]/60 focus:ring-2 focus:ring-[#3390ec]/15 outline-none transition"
@@ -439,9 +659,9 @@ const MessageComposer = memo(function MessageComposer({
             type="submit"
             disabled={isSending || !text.trim()}
             className="w-10 h-10 rounded-full bg-[#3390ec] hover:bg-[#267fd9] disabled:opacity-40 disabled:hover:bg-[#3390ec] text-white flex items-center justify-center transition shadow-sm shrink-0"
-            title="Send message"
+            title={editingMessage ? "Save edit" : "Send message"}
           >
-            <Send className="w-4 h-4 ml-0.5" />
+            {editingMessage ? <Check className="w-4 h-4" /> : <Send className="w-4 h-4 ml-0.5" />}
           </button>
         </form>
       </footer>
@@ -692,16 +912,98 @@ const ChatBubble = memo(function ChatBubble({
           </div>
         )}
 
+        {/* Call Message Rendering */}
+        {msg.call && (
+          <div className="mb-2 p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0">
+              <PhoneCall className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <span className="text-xs font-semibold text-slate-800 block">
+                {msg.call.isVideo ? "Video Call" : "Voice Call"}
+              </span>
+              <span className="text-[11px] text-red-500">
+                {msg.fromMe ? "Outgoing call" : "Missed call"}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Event Message Rendering */}
+        {msg.event && (
+          <div className="mb-2 p-3.5 rounded-2xl bg-gradient-to-br from-blue-50/90 to-sky-50/50 border border-blue-200/80 shadow-xs">
+            <div className="flex items-center gap-2 mb-2 text-[#3390ec]">
+              <Calendar className="w-4 h-4 shrink-0" />
+              <span className="text-xs font-bold uppercase tracking-wider">Event</span>
+            </div>
+            <h4 className="text-sm font-bold text-slate-800 mb-1 leading-snug">{msg.event.name}</h4>
+            {msg.event.description && (
+              <p className="text-xs text-slate-600 mb-2 leading-relaxed">{msg.event.description}</p>
+            )}
+            <div className="space-y-1 text-[11px] text-slate-500">
+              {msg.event.startTime && (
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                  <span>{new Date(msg.event.startTime).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+                </div>
+              )}
+              {msg.event.locationName && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-400">📍</span>
+                  <span className="truncate">{msg.event.locationName}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Poll Message Rendering */}
+        {msg.poll && (
+          <div className="mb-2 p-3.5 rounded-2xl bg-slate-50/90 border border-slate-200/90 shadow-xs">
+            <div className="flex items-center gap-2 mb-2 text-[#3390ec]">
+              <BarChart2 className="w-4 h-4 shrink-0" />
+              <span className="text-xs font-bold uppercase tracking-wider">Poll</span>
+            </div>
+            <h4 className="text-sm font-bold text-slate-800 mb-3">{msg.poll.name}</h4>
+            <div className="space-y-2">
+              {msg.poll.options.map((opt, oIdx) => (
+                <div
+                  key={`poll-opt-${oIdx}`}
+                  className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-between text-xs transition"
+                >
+                  <span className="font-medium text-slate-700">{opt.name}</span>
+                  <span className="text-[11px] text-slate-400 font-mono">0 votes</span>
+                </div>
+              ))}
+            </div>
+            <span className="text-[10px] text-slate-400 mt-2 block">
+              {msg.poll.selectableCount && msg.poll.selectableCount > 1
+                ? `Select up to ${msg.poll.selectableCount} options`
+                : "Select 1 option"}
+            </span>
+          </div>
+        )}
+
         {/* Formatted Text Content */}
-        {(!msg.media || msg.media.caption || (msg.text && !msg.text.startsWith("🎨") && !msg.text.startsWith("🎵") && !msg.text.startsWith("📷") && !msg.text.startsWith("🎥") && !msg.text.startsWith("📄"))) && (
+        {(!msg.poll && !msg.event && (!msg.media || msg.media.caption || (msg.text && !msg.text.startsWith("🎨") && !msg.text.startsWith("🎵") && !msg.text.startsWith("📷") && !msg.text.startsWith("🎥") && !msg.text.startsWith("📄")))) && (
           <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1 px-1">
             <div className="whitespace-pre-wrap break-words leading-relaxed flex-1 text-slate-800 text-[13.5px]">
               {renderFormattedText(msg.text)}
             </div>
             <span className="flex items-center space-x-1 text-[11px] text-slate-400 select-none ml-auto shrink-0 pb-0.5">
+              {msg.isEdited && (
+                <span className="text-[10px] text-slate-400 italic mr-0.5 select-none">(edited)</span>
+              )}
               <span>{timeStr}</span>
               {isMe && <CheckCheck className="w-3.5 h-3.5 text-[#3390ec] ml-0.5 inline-block" />}
             </span>
+          </div>
+        )}
+
+        {/* Message Reaction Badge */}
+        {msg.reaction && (
+          <div className="absolute -bottom-2.5 right-2 px-1.5 py-0.5 bg-white rounded-full shadow-sm border border-slate-200 text-xs flex items-center gap-0.5 select-none">
+            <span>{msg.reaction}</span>
           </div>
         )}
 
@@ -740,6 +1042,7 @@ export default function WhatsAppWebPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterTab, setFilterTab] = useState<"all" | "unread" | "groups" | "archived" | "status">("all");
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+  const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [statuses, setStatuses] = useState<StatusBroadcast[]>([]);
   const [activeStatusGroup, setActiveStatusGroup] = useState<ContactStatusGroup | null>(null);
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
@@ -802,11 +1105,40 @@ export default function WhatsAppWebPage() {
     type: "chat",
   });
 
-  // Modals
+  // Modals & Dynamic State
   const [showNewChatModal, setShowNewChatModal] = useState(false);
   const [newChatNumber, setNewChatNumber] = useState("");
   const [showLeaveGroupModal, setShowLeaveGroupModal] = useState(false);
   const [isLeavingGroup, setIsLeavingGroup] = useState(false);
+
+  // Contacts
+  const [contacts, setContacts] = useState<ContactRecord[]>([]);
+  const [contactSearchQuery, setContactSearchQuery] = useState("");
+
+  // Reactions (5 default emojis + replacer)
+  const [quickEmojis, setQuickEmojis] = useState<string[]>(["👍", "❤️", "😂", "😮", "😢"]);
+  const [showExtendedReactions, setShowExtendedReactions] = useState(false);
+
+  // Poll Modal State
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+  const [pollAllowMultiple, setPollAllowMultiple] = useState(false);
+
+  // Event Modal State
+  const [showEventModal, setShowEventModal] = useState(false);
+  const [eventName, setEventName] = useState("");
+  const [eventDesc, setEventDesc] = useState("");
+  const [eventDateTime, setEventDateTime] = useState("");
+  const [eventLocation, setEventLocation] = useState("");
+
+  // Add Member Modal State
+  const [showAddMemberModal, setShowAddMemberModal] = useState(false);
+  const [newMemberPhone, setNewMemberPhone] = useState("");
+  const [isAddingMember, setIsAddingMember] = useState(false);
+
+  // Community Collapsed / Expanded states
+  const [expandedCommunities, setExpandedCommunities] = useState<Record<string, boolean>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -841,8 +1173,26 @@ export default function WhatsAppWebPage() {
           });
         }
       })
-      .catch(() => undefined);
   }, [connectionState]);
+
+  // Fetch unique contacts
+  const fetchContacts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/chats?contacts=true");
+      const data = await res.json();
+      if (data.success && Array.isArray(data.contacts)) {
+        setContacts(data.contacts);
+      }
+    } catch (err) {
+      console.error("Error fetching contacts:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (connectionState === "open") {
+      fetchContacts();
+    }
+  }, [connectionState, fetchContacts]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -873,6 +1223,20 @@ export default function WhatsAppWebPage() {
         if (!a.isPinned && b.isPinned) return 1;
         return (b.lastTimestamp || 0) - (a.lastTimestamp || 0);
       });
+    });
+
+    // Also update activeChat if updated in incoming chats
+    setActiveChat((curr) => {
+      if (!curr) return null;
+      const matched = incoming.find((c) => c && c.jid === curr.jid);
+      if (matched) {
+        return {
+          ...curr,
+          ...matched,
+          participants: matched.participants?.length ? matched.participants : curr.participants,
+        };
+      }
+      return curr;
     });
   }, []);
 
@@ -957,7 +1321,15 @@ export default function WhatsAppWebPage() {
       es.addEventListener("message", (event: MessageEvent) => {
         try {
           const msg: ChatMessage = JSON.parse(event.data);
-          setMessages((prev) => [...prev, msg]);
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === msg.id);
+            if (idx !== -1) {
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], ...msg };
+              return updated;
+            }
+            return [...prev, msg];
+          });
         } catch (e) {
           console.error("Error parsing message event:", e);
         }
@@ -1002,6 +1374,7 @@ export default function WhatsAppWebPage() {
   // Fetch messages when activeChat changes
   useEffect(() => {
     if (activeChat?.jid) {
+      // Load thread message history from database
       fetch(`/api/messages?jid=${encodeURIComponent(activeChat.jid)}`)
         .then((res) => res.json())
         .then((data) => {
@@ -1010,6 +1383,22 @@ export default function WhatsAppWebPage() {
           }
         })
         .catch((err) => console.error("Error fetching messages:", err));
+
+      // If activeChat is a group and participants aren't populated yet, fetch group metadata
+      if (activeChat.isGroup && (!activeChat.participants || activeChat.participants.length === 0)) {
+        fetch("/api/chats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "group_metadata", jid: activeChat.jid }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.success && data.chat) {
+              updateChatsDeduplicated([data.chat]);
+            }
+          })
+          .catch(() => undefined);
+      }
 
       fetch("/api/chats", {
         method: "POST",
@@ -1023,7 +1412,7 @@ export default function WhatsAppWebPage() {
         body: JSON.stringify({ action: "subscribe_presence", jid: activeChat.jid }),
       }).catch(() => undefined);
     }
-  }, [activeChat?.jid]);
+  }, [activeChat?.jid, activeChat?.isGroup, updateChatsDeduplicated]);
 
   // Auto scroll
   useEffect(() => {
@@ -1094,6 +1483,29 @@ export default function WhatsAppWebPage() {
 
   const handleSendMessage = async (text: string) => {
     if (!activeChat || !text.trim()) return;
+
+    if (editingMessage) {
+      const editTarget = editingMessage;
+      setEditingMessage(null);
+      setIsSending(true);
+      try {
+        await fetch("/api/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "edit",
+            to: activeChat.jid,
+            messageId: editTarget.id,
+            text,
+          }),
+        });
+      } catch (err) {
+        console.error("Error editing message:", err);
+      } finally {
+        setIsSending(false);
+      }
+      return;
+    }
 
     const replyTarget = replyingTo;
     setReplyingTo(null);
@@ -1215,6 +1627,15 @@ export default function WhatsAppWebPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "clear", jid: chat.jid }),
         });
+      } else if (action === "mute") {
+        const next = !chat.isMuted;
+        setChats((prev) => prev.map((c) => (c.jid === chat.jid ? { ...c, isMuted: next } : c)));
+        if (activeChat?.jid === chat.jid) setActiveChat((c) => (c ? { ...c, isMuted: next } : null));
+        await fetch("/api/chats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "mute", jid: chat.jid, muted: next }),
+        });
       } else if (action === "delete") {
         setChats((prev) => prev.filter((c) => c.jid !== chat.jid));
         if (activeChat?.jid === chat.jid) setActiveChat(null);
@@ -1228,6 +1649,254 @@ export default function WhatsAppWebPage() {
       console.error("Chat action error:", e);
     }
   };
+
+  // Send Media Message Handler
+  const handleSendMedia = async (file: File, caption?: string) => {
+    if (!activeChat) return;
+    setIsSending(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64Data = (reader.result as string).split(",")[1];
+        let mediaType: "image" | "video" | "audio" | "document" = "document";
+        if (file.type.startsWith("image/")) mediaType = "image";
+        else if (file.type.startsWith("video/")) mediaType = "video";
+        else if (file.type.startsWith("audio/")) mediaType = "audio";
+
+        await fetch("/api/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "media",
+            to: activeChat.jid,
+            mediaBase64: base64Data,
+            mediaType,
+            mimetype: file.type || "application/octet-stream",
+            caption: caption || file.name,
+            fileName: file.name,
+          }),
+        });
+        setIsSending(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error("Error sending media:", err);
+      setIsSending(false);
+    }
+  };
+
+  // Send Poll Handler
+  const handleSendPoll = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeChat || !pollQuestion.trim()) return;
+    const validOptions = pollOptions.filter((opt) => opt.trim());
+    if (validOptions.length < 2) {
+      alert("Please provide at least 2 poll options");
+      return;
+    }
+    setIsSending(true);
+    try {
+      await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "poll",
+          to: activeChat.jid,
+          name: pollQuestion.trim(),
+          options: validOptions,
+          selectableCount: pollAllowMultiple ? 0 : 1,
+        }),
+      });
+      setShowPollModal(false);
+      setPollQuestion("");
+      setPollOptions(["", ""]);
+      setPollAllowMultiple(false);
+    } catch (err) {
+      console.error("Error creating poll:", err);
+      alert("Failed to create poll");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // Send Event Handler
+  const handleSendEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeChat || !eventName.trim()) return;
+    setIsSending(true);
+    try {
+      const startTime = eventDateTime ? new Date(eventDateTime).getTime() : Date.now();
+      await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "event",
+          to: activeChat.jid,
+          name: eventName.trim(),
+          description: eventDesc.trim() || undefined,
+          startTime,
+          locationName: eventLocation.trim() || undefined,
+        }),
+      });
+      setShowEventModal(false);
+      setEventName("");
+      setEventDesc("");
+      setEventDateTime("");
+      setEventLocation("");
+    } catch (err) {
+      console.error("Error creating event:", err);
+      alert("Failed to create event");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // Reaction Handler
+  const handleSendReaction = async (msg: ChatMessage, emoji: string) => {
+    try {
+      await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reaction",
+          to: activeChat?.jid || msg.chatJid,
+          messageId: msg.id,
+          emoji,
+          fromMe: msg.fromMe,
+        }),
+      });
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, reaction: emoji } : m))
+      );
+      setContextMenu((prev) => ({ ...prev, visible: false }));
+      setShowExtendedReactions(false);
+    } catch (err) {
+      console.error("Error sending reaction:", err);
+    }
+  };
+
+  const handleSelectExtendedReaction = (msg: ChatMessage, emoji: string) => {
+    setQuickEmojis((prev) => [...prev.slice(0, 4), emoji]);
+    handleSendReaction(msg, emoji);
+  };
+
+  // Participant Context Menu & Actions
+  const handleParticipantContextMenu = (e: React.MouseEvent, participant: GroupParticipant) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      visible: true,
+      x: Math.min(e.clientX, window.innerWidth - 220),
+      y: Math.min(e.clientY, window.innerHeight - 250),
+      type: "participant",
+      targetParticipant: participant,
+    });
+  };
+
+  const handleParticipantAction = async (
+    action: "promote_participant" | "demote_participant" | "remove_participant",
+    participant: GroupParticipant
+  ) => {
+    if (!activeChat || !activeChat.isGroup) return;
+    try {
+      const res = await fetch("/api/chats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          jid: activeChat.jid,
+          participantJid: participant.jid,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const metaRes = await fetch("/api/chats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "group_metadata", jid: activeChat.jid }),
+        });
+        const metaData = await metaRes.json();
+        if (metaData.success && metaData.chat) {
+          updateChatsDeduplicated([metaData.chat]);
+          setActiveChat(metaData.chat);
+        }
+      } else {
+        alert(data.error || "Action failed");
+      }
+    } catch (err) {
+      console.error("Participant action failed:", err);
+    } finally {
+      setContextMenu((prev) => ({ ...prev, visible: false }));
+    }
+  };
+
+  const handleAddMember = async (targetJid: string) => {
+    if (!activeChat || !activeChat.isGroup || !targetJid) return;
+    setIsAddingMember(true);
+    try {
+      const cleanJid = targetJid.includes("@")
+        ? targetJid
+        : `${targetJid.replace(/\D/g, "")}@s.whatsapp.net`;
+      const res = await fetch("/api/chats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add_participant",
+          jid: activeChat.jid,
+          participantJid: cleanJid,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setShowAddMemberModal(false);
+        setNewMemberPhone("");
+        const metaRes = await fetch("/api/chats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "group_metadata", jid: activeChat.jid }),
+        });
+        const metaData = await metaRes.json();
+        if (metaData.success && metaData.chat) {
+          updateChatsDeduplicated([metaData.chat]);
+          setActiveChat(metaData.chat);
+        }
+      } else {
+        alert(data.error || "Failed to add participant");
+      }
+    } catch (err) {
+      console.error("Error adding member:", err);
+      alert("Error adding member");
+    } finally {
+      setIsAddingMember(false);
+    }
+  };
+
+  const handleOpenContactChat = useCallback((contact: ContactRecord) => {
+    const jid = contact.jid;
+    const phone = contact.phoneNumber || jid.split("@")[0].replace(/\D/g, "");
+    const cleanJid = jid.includes("@") ? jid : `${phone}@s.whatsapp.net`;
+    const name = contact.pushName || contact.name || `+${phone}`;
+
+    const newChat: ChatThread = {
+      jid: cleanJid,
+      name,
+      isGroup: false,
+      lastMessage: "Conversation started",
+      lastTimestamp: Date.now(),
+      unreadCount: 0,
+    };
+
+    updateChatsDeduplicated([newChat]);
+    setActiveChat(newChat);
+    setShowNewChatModal(false);
+    setNewChatNumber("");
+
+    fetch("/api/chats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "new", jid: cleanJid, name }),
+    }).catch(() => undefined);
+  }, [updateChatsDeduplicated]);
 
   // Right-click handlers
   const handleChatContextMenu = (e: React.MouseEvent, chat: ChatThread) => {
@@ -1253,6 +1922,20 @@ export default function WhatsAppWebPage() {
       targetMessage: msg,
     });
   };
+
+  // Check if current user is admin of active group
+  const currentUserIsAdmin = useMemo(() => {
+    if (!activeChat?.isGroup || !activeChat.participants) return false;
+    const myPhoneDigits = userProfile.phone ? userProfile.phone.replace(/\D/g, "") : "";
+    const myJidDigits = userProfile.meJid ? userProfile.meJid.replace(/\D/g, "") : "";
+    return activeChat.participants.some((p) => {
+      const pDigits = p.jid.replace(/\D/g, "");
+      const isSelf =
+        (myPhoneDigits && pDigits.includes(myPhoneDigits)) ||
+        (myJidDigits && pDigits.includes(myJidDigits));
+      return isSelf && (p.isAdmin || p.isSuperAdmin || p.type === "admin" || p.type === "superadmin");
+    });
+  }, [activeChat, userProfile]);
 
   // Filtered chats logic with Pinned on top and Archive isolation
   const deduplicatedChats = useMemo(() => {
@@ -1285,11 +1968,48 @@ export default function WhatsAppWebPage() {
     });
   }, [deduplicatedChats, searchQuery, filterTab]);
 
+  // Group chats by Community if parentGroupJid is set
+  const { topLevelChats, communitySubgroups } = useMemo(() => {
+    const subgroupsMap = new Map<string, ChatThread[]>();
+    for (const chat of filteredChats) {
+      if (chat.parentGroupJid) {
+        const list = subgroupsMap.get(chat.parentGroupJid) || [];
+        list.push(chat);
+        subgroupsMap.set(chat.parentGroupJid, list);
+      }
+    }
+
+    if (searchQuery.trim() || filterTab === "archived") {
+      return { topLevelChats: filteredChats, communitySubgroups: new Map<string, ChatThread[]>() };
+    }
+
+    const top = filteredChats.filter((c) => !c.parentGroupJid);
+
+    // If there are parent community groups with subgroups not in topLevelChats, synthesize parent headers
+    for (const [parentJid, children] of subgroupsMap.entries()) {
+      if (!top.some((c) => c.jid === parentJid)) {
+        const synthesized: ChatThread = {
+          jid: parentJid,
+          name: "Community",
+          isGroup: true,
+          isParentGroup: true,
+          lastMessage: `${children.length} group${children.length > 1 ? "s" : ""}`,
+          lastTimestamp: Math.max(...children.map((c) => c.lastTimestamp || 0)),
+          unreadCount: children.reduce((acc, c) => acc + (c.unreadCount || 0), 0),
+          subgroupsCount: children.length,
+        };
+        top.unshift(synthesized);
+      }
+    }
+
+    return { topLevelChats: top, communitySubgroups: subgroupsMap };
+  }, [filteredChats, searchQuery, filterTab]);
+
   const activeMessages = activeChat
     ? messages.filter((m) => m.chatJid === activeChat.jid)
     : [];
 
-  const displayName = userProfile.name || userProfile.pushName || userProfile.phone || "WhatsRook";
+  const displayName = userProfile.pushName || userProfile.name || userProfile.phone || "WhatsRook";
 
   /* =======================================================================
      VIEW 1: AUTH / PAIRING SCREEN (TELEGRAM LIGHT BLUE THEME)
@@ -1483,7 +2203,7 @@ export default function WhatsAppWebPage() {
             <button
               onClick={handleSyncGroups}
               disabled={isSyncingGroups}
-              title="Sync all groups & metadata"
+              title={`Refresh • ${userProfile.pushName || userProfile.name || "Me"}`}
               className="p-2 hover:bg-slate-100 rounded-full hover:text-[#3390ec] disabled:opacity-40 transition"
             >
               <RefreshCw className={`w-5 h-5 ${isSyncingGroups ? "animate-spin text-[#3390ec]" : ""}`} />
@@ -1647,7 +2367,7 @@ export default function WhatsAppWebPage() {
                 })}
               </div>
             )
-          ) : filteredChats.length === 0 ? (
+          ) : topLevelChats.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-center text-slate-400 px-4">
               <MessageSquare className="w-8 h-8 stroke-1 mb-2 text-slate-300" />
               <p className="text-xs font-medium">No chats found.</p>
@@ -1655,78 +2375,155 @@ export default function WhatsAppWebPage() {
                 onClick={handleSyncGroups}
                 className="mt-3 text-[#3390ec] text-xs font-semibold hover:underline flex items-center gap-1"
               >
-                <RefreshCw className="w-3.5 h-3.5" /> Sync your groups
+                <RefreshCw className="w-3.5 h-3.5" /> Refresh chats
               </button>
             </div>
           ) : (
-            filteredChats.map((chat, idx) => {
+            topLevelChats.map((chat, idx) => {
               const isSelected = activeChat?.jid === chat.jid;
               const safeKey = chat.jid ? `chat-thread-${chat.jid}` : `chat-thread-idx-${idx}`;
               const isGroup = chat.isGroup;
+              const isCommunity = Boolean(chat.isParentGroup || communitySubgroups.has(chat.jid));
+              const subgroups = communitySubgroups.get(chat.jid) || [];
+              const isExpanded = Boolean(expandedCommunities[chat.jid]);
 
               return (
-                <div
-                  key={safeKey}
-                  onClick={() => {
-                    setActiveChat(chat);
-                    setShowChatInfoDrawer(false);
-                  }}
-                  onContextMenu={(e) => handleChatContextMenu(e, chat)}
-                  className={`flex items-center px-4 py-3 cursor-pointer transition relative ${
-                    isSelected ? "bg-[#eaf3fc]" : "hover:bg-[#f6f8fa]"
-                  }`}
-                >
-                  <Avatar name={chat.name} avatarUrl={chat.avatarUrl} size="md" isGroup={isGroup} />
+                <React.Fragment key={safeKey}>
+                  <div
+                    onClick={() => {
+                      if (isCommunity && subgroups.length > 0) {
+                        setExpandedCommunities((prev) => ({
+                          ...prev,
+                          [chat.jid]: !prev[chat.jid],
+                        }));
+                      } else {
+                        setActiveChat(chat);
+                        setShowChatInfoDrawer(false);
+                      }
+                    }}
+                    onContextMenu={(e) => handleChatContextMenu(e, chat)}
+                    className={`flex items-center px-4 py-3 cursor-pointer transition relative ${
+                      isSelected ? "bg-[#eaf3fc]" : "hover:bg-[#f6f8fa]"
+                    } ${isCommunity ? "bg-slate-50/70" : ""}`}
+                  >
+                    <Avatar name={chat.name} avatarUrl={chat.avatarUrl} size="md" isGroup={isGroup} />
 
-                  <div className="ml-3.5 flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[13.5px] font-semibold text-slate-800 truncate flex items-center gap-1.5">
-                        {chat.isPinned && <Pin className="w-3 h-3 text-[#3390ec] fill-[#3390ec] shrink-0" />}
-                        {chat.name}
-                        {isGroup && chat.participantsCount ? (
-                          <span className="text-[10px] font-normal text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded-full">
-                            {chat.participantsCount}
+                    <div className="ml-3.5 flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[13.5px] font-semibold text-slate-800 truncate flex items-center gap-1.5">
+                          {chat.isPinned && <Pin className="w-3 h-3 text-[#3390ec] fill-[#3390ec] shrink-0" />}
+                          {chat.name}
+                          {isCommunity ? (
+                            <span className="text-[10px] font-semibold text-[#3390ec] bg-blue-100/70 border border-blue-200 px-1.5 py-0.2 rounded-full flex items-center gap-1">
+                              <Users className="w-2.5 h-2.5" />
+                              {subgroups.length > 0 ? `${subgroups.length} groups` : "Community"}
+                            </span>
+                          ) : isGroup && chat.participantsCount ? (
+                            <span className="text-[10px] font-normal text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded-full">
+                              {chat.participantsCount}
+                            </span>
+                          ) : null}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {isCommunity && subgroups.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedCommunities((prev) => ({
+                                  ...prev,
+                                  [chat.jid]: !prev[chat.jid],
+                                }));
+                              }}
+                              className="p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition"
+                              title={isExpanded ? "Collapse community groups" : "Expand community groups"}
+                            >
+                              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`} />
+                            </button>
+                          )}
+                          <span className="text-[11px] text-slate-400 shrink-0 font-mono">
+                            {formatChatTime(chat.lastTimestamp)}
                           </span>
-                        ) : null}
-                      </span>
-                      <span className="text-[11px] text-slate-400 shrink-0 font-mono">
-                        {formatChatTime(chat.lastTimestamp)}
-                      </span>
-                    </div>
+                        </div>
+                      </div>
 
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs text-slate-500 truncate pr-2 flex items-center gap-1">
-                        {chat.lastMessage?.includes("Photo") || chat.lastMessage?.includes("📷") ? (
-                          <ImageIcon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        ) : chat.lastMessage?.includes("Video") || chat.lastMessage?.includes("🎥") ? (
-                          <Video className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        ) : chat.lastMessage?.includes("Voice") || chat.lastMessage?.includes("🎵") ? (
-                          <Mic className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        ) : chat.lastMessage?.includes("Sticker") || chat.lastMessage?.includes("🎨") ? (
-                          <Sticker className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        ) : chat.lastMessage?.includes("Document") || chat.lastMessage?.includes("📄") ? (
-                          <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        ) : null}
-                        <span className="truncate">{chat.lastMessage}</span>
-                      </p>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {chat.isBlocked && (
-                          <span title="Blocked">
-                            <Ban className="w-3.5 h-3.5 text-red-500" />
-                          </span>
-                        )}
-                        {chat.unreadCount > 0 && (
-                          <span className="min-w-4 px-1 h-4 rounded-full bg-[#3390ec] text-white text-[10px] font-bold flex items-center justify-center">
-                            {chat.unreadCount}
-                          </span>
-                        )}
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-slate-500 truncate pr-2 flex items-center gap-1">
+                          {chat.lastMessage?.includes("Photo") || chat.lastMessage?.includes("📷") ? (
+                            <ImageIcon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          ) : chat.lastMessage?.includes("Video") || chat.lastMessage?.includes("🎥") ? (
+                            <Video className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          ) : chat.lastMessage?.includes("Voice") || chat.lastMessage?.includes("🎵") ? (
+                            <Mic className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          ) : chat.lastMessage?.includes("Sticker") || chat.lastMessage?.includes("🎨") ? (
+                            <Sticker className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          ) : chat.lastMessage?.includes("Document") || chat.lastMessage?.includes("📄") ? (
+                            <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          ) : null}
+                          <span className="truncate">{chat.lastMessage}</span>
+                        </p>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {chat.isMuted && (
+                            <span title="Muted">
+                              <BellOff className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          )}
+                          {chat.isBlocked && (
+                            <span title="Blocked">
+                              <Ban className="w-3.5 h-3.5 text-red-500" />
+                            </span>
+                          )}
+                          {chat.unreadCount > 0 && (
+                            <span className="min-w-4 px-1 h-4 rounded-full bg-[#3390ec] text-white text-[10px] font-bold flex items-center justify-center">
+                              {chat.unreadCount}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+
+                  {/* Collapsible Subgroups under Community */}
+                  {isCommunity && isExpanded && subgroups.map((sub, sIdx) => {
+                    const isSubSelected = activeChat?.jid === sub.jid;
+                    return (
+                      <div
+                        key={`sub-${sub.jid}-${sIdx}`}
+                        onClick={() => {
+                          setActiveChat(sub);
+                          setShowChatInfoDrawer(false);
+                        }}
+                        onContextMenu={(e) => handleChatContextMenu(e, sub)}
+                        className={`flex items-center pl-9 pr-4 py-2.5 cursor-pointer transition relative border-l-3 border-[#3390ec]/50 ml-6 ${
+                          isSubSelected ? "bg-[#eaf3fc]" : "hover:bg-[#f8fafd]"
+                        }`}
+                      >
+                        <Avatar name={sub.name} avatarUrl={sub.avatarUrl} size="sm" isGroup={true} />
+                        <div className="ml-3 flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-xs font-semibold text-slate-700 truncate">
+                              {sub.name}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {formatChatTime(sub.lastTimestamp)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-slate-500 truncate">{sub.lastMessage}</span>
+                            {sub.unreadCount > 0 && (
+                              <span className="min-w-3.5 px-1 h-3.5 rounded-full bg-[#3390ec] text-white text-[9px] font-bold flex items-center justify-center">
+                                {sub.unreadCount}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </React.Fragment>
               );
             })
-          )}
+            )}
         </div>
       </aside>
 
@@ -1796,30 +2593,13 @@ export default function WhatsAppWebPage() {
                       ? "online"
                       : presences[activeChat.jid]?.lastSeen
                       ? `last seen ${formatChatTime(presences[activeChat.jid].lastSeen!)}`
-                      : activeChat.name !== activeChat.jid.split("@")[0]
+                      : activeChat.phoneNumber
+                      ? cleanPhoneWasm(activeChat.phoneNumber)
+                      : !activeChat.jid.endsWith("@lid")
                       ? cleanPhoneWasm(activeChat.jid.split("@")[0])
                       : "click for contact info"}
                   </span>
                 </div>
-              </div>
-
-              {/* Chat Header Actions */}
-              <div className="flex items-center space-x-2 text-slate-500">
-                <button
-                  onClick={() => setShowChatInfoDrawer((prev) => !prev)}
-                  title="Chat info & settings"
-                  className="p-2 hover:bg-slate-100 rounded-full hover:text-[#3390ec] transition"
-                >
-                  <Info className="w-5 h-5" />
-                </button>
-
-                <button
-                  onClick={() => setActiveChat(null)}
-                  title="Close chat"
-                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition hidden md:block"
-                >
-                  Close
-                </button>
               </div>
             </header>
 
@@ -1881,7 +2661,11 @@ export default function WhatsAppWebPage() {
                     <p className="text-xs text-slate-500 mt-0.5">
                       {activeChat.isGroup
                         ? `${activeChat.participantsCount ?? activeChat.participants?.length ?? 0} participants`
-                        : activeChat.jid.split("@")[0]}
+                        : activeChat.phoneNumber
+                        ? cleanPhoneWasm(activeChat.phoneNumber)
+                        : !activeChat.jid.endsWith("@lid")
+                        ? cleanPhoneWasm(activeChat.jid.split("@")[0])
+                        : "~"}
                     </p>
                   </div>
 
@@ -1921,6 +2705,38 @@ export default function WhatsAppWebPage() {
                       {activeChat.isArchived && <Check className="w-4 h-4 text-[#3390ec]" />}
                     </button>
 
+                    {/* Mute Chat Toggle */}
+                    <button
+                      onClick={() => handleChatAction("mute", activeChat)}
+                      className="w-full text-left px-3 py-2 hover:bg-slate-100 rounded-xl flex items-center justify-between text-xs text-slate-700 transition"
+                    >
+                      <span className="flex items-center gap-2.5">
+                        {activeChat.isMuted ? (
+                          <BellOff className="w-4 h-4 text-slate-500" />
+                        ) : (
+                          <Bell className="w-4 h-4 text-[#3390ec]" />
+                        )}
+                        {activeChat.isMuted ? "Unmute notifications" : "Mute notifications"}
+                      </span>
+                      {activeChat.isMuted && <Check className="w-4 h-4 text-[#3390ec]" />}
+                    </button>
+
+                    {/* Add Member button (for group) */}
+                    {activeChat.isGroup && (
+                      <button
+                        onClick={() => {
+                          fetchContacts();
+                          setShowAddMemberModal(true);
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-slate-100 rounded-xl flex items-center justify-between text-xs text-[#3390ec] font-semibold transition"
+                      >
+                        <span className="flex items-center gap-2.5">
+                          <UserPlus className="w-4 h-4 text-[#3390ec]" />
+                          Add Member
+                        </span>
+                      </button>
+                    )}
+
                     {!activeChat.isGroup && (
                       <button
                         onClick={() => handleChatAction("block", activeChat)}
@@ -1943,9 +2759,22 @@ export default function WhatsAppWebPage() {
                   {/* Group Participants List */}
                   {activeChat.isGroup && activeChat.participants && (
                     <div className="p-4 flex-1">
-                      <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
-                        Participants ({activeChat.participants.length})
-                      </span>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                          Participants ({activeChat.participants.length})
+                        </span>
+                        {currentUserIsAdmin && (
+                          <button
+                            onClick={() => {
+                              fetchContacts();
+                              setShowAddMemberModal(true);
+                            }}
+                            className="text-xs text-[#3390ec] font-semibold hover:underline flex items-center gap-1"
+                          >
+                            <Plus className="w-3.5 h-3.5" /> Add
+                          </button>
+                        )}
+                      </div>
                       <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1 scrollbar-thin">
                         {[...activeChat.participants]
                           .sort((a, b) => {
@@ -1980,7 +2809,8 @@ export default function WhatsAppWebPage() {
                             return (
                               <div
                                 key={`part-${p.jid}-${idx}`}
-                                className="flex items-center justify-between py-2 px-2.5 hover:bg-slate-50 rounded-xl transition"
+                                onContextMenu={(e) => handleParticipantContextMenu(e, p)}
+                                className="flex items-center justify-between py-2 px-2.5 hover:bg-slate-50 rounded-xl transition group"
                               >
                                 <div className="flex items-center gap-2.5 min-w-0">
                                   <Avatar name={displayName} size="sm" />
@@ -2002,11 +2832,20 @@ export default function WhatsAppWebPage() {
                                     )}
                                   </div>
                                 </div>
-                                {isAdm ? (
-                                  <span className="text-[10px] bg-blue-50 text-[#3390ec] font-semibold px-2 py-0.5 rounded-full border border-blue-200 shrink-0">
-                                    {isCreator ? "Creator" : "Admin"}
-                                  </span>
-                                ) : null}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {isAdm ? (
+                                    <span className="text-[10px] bg-blue-50 text-[#3390ec] font-semibold px-2 py-0.5 rounded-full border border-blue-200">
+                                      {isCreator ? "Creator" : "Admin"}
+                                    </span>
+                                  ) : null}
+                                  <button
+                                    onClick={(e) => handleParticipantContextMenu(e, p)}
+                                    className="p-1 hover:bg-slate-200/80 rounded-full text-slate-400 hover:text-slate-700 transition"
+                                    title="Participant options"
+                                  >
+                                    <MoreVertical className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </div>
                             );
                           })}
@@ -2039,8 +2878,13 @@ export default function WhatsAppWebPage() {
             {/* Composer */}
             <MessageComposer
               replyingTo={replyingTo}
+              editingMessage={editingMessage}
               onCancelReply={() => setReplyingTo(null)}
+              onCancelEdit={() => setEditingMessage(null)}
               onSend={handleSendMessage}
+              onSendMedia={handleSendMedia}
+              onOpenPollModal={() => setShowPollModal(true)}
+              onOpenEventModal={() => setShowEventModal(true)}
               isSending={isSending}
             />
           </div>
@@ -2053,7 +2897,7 @@ export default function WhatsAppWebPage() {
       {contextMenu.visible && (
         <div
           style={{ top: contextMenu.y, left: contextMenu.x }}
-          className="fixed z-50 w-56 bg-white rounded-2xl shadow-xl border border-slate-200 py-1.5 text-xs text-slate-700 animate-in fade-in-50 zoom-in-95"
+          className="fixed z-50 w-60 bg-white rounded-2xl shadow-xl border border-slate-200 py-1.5 text-xs text-slate-700 animate-in fade-in-50 zoom-in-95"
           onClick={(e) => e.stopPropagation()}
         >
           {contextMenu.type === "chat" && contextMenu.targetChat && (
@@ -2105,6 +2949,21 @@ export default function WhatsAppWebPage() {
               >
                 <Archive className="w-4 h-4 text-slate-500" />
                 {contextMenu.targetChat.isArchived ? "Unarchive Chat" : "Archive Chat"}
+              </button>
+
+              <button
+                onClick={() => {
+                  handleChatAction("mute", contextMenu.targetChat!);
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                }}
+                className="w-full text-left px-3.5 py-2 hover:bg-slate-100 flex items-center gap-2.5 transition"
+              >
+                {contextMenu.targetChat.isMuted ? (
+                  <BellOff className="w-4 h-4 text-slate-500" />
+                ) : (
+                  <Bell className="w-4 h-4 text-[#3390ec]" />
+                )}
+                {contextMenu.targetChat.isMuted ? "Unmute Notifications" : "Mute Notifications"}
               </button>
 
               <button
@@ -2169,15 +3028,67 @@ export default function WhatsAppWebPage() {
 
           {contextMenu.type === "message" && contextMenu.targetMessage && (
             <>
+              {/* 5 Quick Reaction Emojis + '+' Button */}
+              <div className="px-2 py-1.5 mb-1 bg-slate-50 border-b border-slate-100 flex items-center justify-between rounded-t-xl gap-1">
+                {quickEmojis.map((emoji, idx) => (
+                  <button
+                    key={`quick-${emoji}-${idx}`}
+                    onClick={() => handleSendReaction(contextMenu.targetMessage!, emoji)}
+                    className="text-lg hover:scale-125 transition-transform p-1 rounded-lg hover:bg-white active:scale-95"
+                    title={`React ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowExtendedReactions((prev) => !prev);
+                  }}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-slate-200/80 hover:bg-[#3390ec] hover:text-white text-slate-600 transition"
+                  title="More reactions"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Extended Reactions Popover */}
+              {showExtendedReactions && (
+                <div className="px-2 py-2 border-b border-slate-100 bg-white grid grid-cols-6 gap-1 max-h-36 overflow-y-auto">
+                  {POPULAR_EXTENDED_EMOJIS.map((emoji) => (
+                    <button
+                      key={`ext-${emoji}`}
+                      onClick={() => handleSelectExtendedReaction(contextMenu.targetMessage!, emoji)}
+                      className="text-base hover:scale-125 transition-transform p-1 rounded hover:bg-slate-100"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <button
                 onClick={() => {
                   setReplyingTo(contextMenu.targetMessage!);
+                  setEditingMessage(null);
                   setContextMenu((prev) => ({ ...prev, visible: false }));
                 }}
                 className="w-full text-left px-3.5 py-2 hover:bg-slate-100 flex items-center gap-2.5 transition"
               >
                 <Reply className="w-4 h-4 text-[#3390ec]" /> Reply
               </button>
+              {contextMenu.targetMessage.fromMe && contextMenu.targetMessage.text && (
+                <button
+                  onClick={() => {
+                    setEditingMessage(contextMenu.targetMessage!);
+                    setReplyingTo(null);
+                    setContextMenu((prev) => ({ ...prev, visible: false }));
+                  }}
+                  className="w-full text-left px-3.5 py-2 hover:bg-slate-100 flex items-center gap-2.5 transition"
+                >
+                  <Edit2 className="w-4 h-4 text-[#3390ec]" /> Edit Message
+                </button>
+              )}
               {contextMenu.targetMessage.text && (
                 <button
                   onClick={() => {
@@ -2210,16 +3121,70 @@ export default function WhatsAppWebPage() {
               </button>
             </>
           )}
+
+          {contextMenu.type === "participant" && contextMenu.targetParticipant && (
+            <>
+              <div className="px-3.5 py-1.5 border-b border-slate-100 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                {contextMenu.targetParticipant.name || contextMenu.targetParticipant.pushName || "Participant"}
+              </div>
+              <button
+                onClick={() => {
+                  const jid = contextMenu.targetParticipant!.jid;
+                  const phone = contextMenu.targetParticipant!.phoneNumber || jid.split("@")[0];
+                  const newChat: ChatThread = {
+                    jid: jid.includes("@") ? jid : `${phone}@s.whatsapp.net`,
+                    name: contextMenu.targetParticipant!.name || contextMenu.targetParticipant!.pushName || `+${phone}`,
+                    isGroup: false,
+                    lastMessage: "Conversation started",
+                    lastTimestamp: Date.now(),
+                    unreadCount: 0,
+                  };
+                  updateChatsDeduplicated([newChat]);
+                  setActiveChat(newChat);
+                  setShowChatInfoDrawer(false);
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                }}
+                className="w-full text-left px-3.5 py-2 hover:bg-slate-100 flex items-center gap-2.5 transition"
+              >
+                <MessageSquare className="w-4 h-4 text-[#3390ec]" /> Message Privately
+              </button>
+              {currentUserIsAdmin && (
+                <>
+                  {contextMenu.targetParticipant.isAdmin ? (
+                    <button
+                      onClick={() => handleParticipantAction("demote_participant", contextMenu.targetParticipant!)}
+                      className="w-full text-left px-3.5 py-2 hover:bg-slate-100 flex items-center gap-2.5 transition text-amber-600"
+                    >
+                      <ShieldAlert className="w-4 h-4" /> Dismiss as Admin
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleParticipantAction("promote_participant", contextMenu.targetParticipant!)}
+                      className="w-full text-left px-3.5 py-2 hover:bg-slate-100 flex items-center gap-2.5 transition text-[#3390ec]"
+                    >
+                      <ShieldCheck className="w-4 h-4" /> Make Group Admin
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleParticipantAction("remove_participant", contextMenu.targetParticipant!)}
+                    className="w-full text-left px-3.5 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2.5 transition"
+                  >
+                    <UserX className="w-4 h-4 text-red-500" /> Remove from Group
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
 
       {/* ===================================================================
-          MODAL 1: NEW CHAT MODAL
+          MODAL 1: NEW CHAT MODAL (WITH CONTACTS PICKER)
           =================================================================== */}
       {showNewChatModal && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-3xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-md w-full p-6 shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4 shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <MessageSquarePlus className="w-5 h-5 text-[#3390ec]" /> Start New Chat
               </h3>
@@ -2231,35 +3196,400 @@ export default function WhatsAppWebPage() {
               </button>
             </div>
 
-            <form onSubmit={handleStartNewChat} className="space-y-4">
-              <div>
-                <label className="text-xs text-slate-500 block mb-1 font-medium">
-                  Recipient Phone Number (with Country Code):
-                </label>
+            {/* Manual Phone Input Form */}
+            <form onSubmit={handleStartNewChat} className="space-y-3 shrink-0 mb-4 pb-4 border-b border-slate-100">
+              <label className="text-xs text-slate-500 block font-medium">
+                Enter phone number directly:
+              </label>
+              <div className="flex gap-2">
                 <input
                   type="tel"
                   placeholder="e.g. 2348012345678"
                   value={newChatNumber}
                   onChange={(e) => setNewChatNumber(e.target.value)}
-                  className="w-full bg-[#f4f6f8] border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#3390ec] focus:ring-2 focus:ring-[#3390ec]/20"
+                  className="flex-1 bg-[#f4f6f8] border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#3390ec] focus:ring-2 focus:ring-[#3390ec]/20"
+                />
+                <button
+                  type="submit"
+                  disabled={!newChatNumber.trim()}
+                  className="px-4 py-2 rounded-xl bg-[#3390ec] hover:bg-[#267fd9] disabled:opacity-50 text-xs font-semibold text-white transition shadow-sm shrink-0"
+                >
+                  Start
+                </button>
+              </div>
+            </form>
+
+            {/* Contacts Picker Section */}
+            <div className="flex-1 flex flex-col min-h-0">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-slate-600">
+                  Or pick from contacts ({contacts.length})
+                </span>
+                <button
+                  onClick={fetchContacts}
+                  className="text-[11px] text-[#3390ec] hover:underline flex items-center gap-1 font-medium"
+                >
+                  <RefreshCw className="w-3 h-3" /> Refresh
+                </button>
+              </div>
+
+              <div className="relative mb-2">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search contacts..."
+                  value={contactSearchQuery}
+                  onChange={(e) => setContactSearchQuery(e.target.value)}
+                  className="w-full bg-[#f4f6f8] text-xs text-slate-800 placeholder-slate-400 rounded-xl pl-8 pr-3 py-2 border border-slate-200 focus:outline-none focus:border-[#3390ec]"
+                />
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
+                {contacts
+                  .filter((c) => {
+                    const q = contactSearchQuery.toLowerCase();
+                    const name = (c.pushName || c.name || "").toLowerCase();
+                    const phone = (c.phoneNumber || c.jid || "").toLowerCase();
+                    return name.includes(q) || phone.includes(q);
+                  })
+                  .map((contact, cIdx) => {
+                    const formatted = contact.phoneNumber ? cleanPhoneWasm(contact.phoneNumber) : undefined;
+                    const cName = contact.pushName || contact.name || formatted || "~";
+                    return (
+                      <div
+                        key={`c-${contact.jid}-${cIdx}`}
+                        onClick={() => handleOpenContactChat(contact)}
+                        className="flex items-center justify-between p-2 rounded-xl hover:bg-slate-100 cursor-pointer transition"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Avatar name={cName} size="sm" />
+                          <div className="min-w-0">
+                            <span className="text-xs font-semibold text-slate-800 block truncate">
+                              {cName}
+                            </span>
+                            {formatted && cName !== formatted && (
+                              <span className="text-[10px] text-slate-400 block truncate font-mono">
+                                {formatted}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <span className="text-[11px] text-[#3390ec] font-medium shrink-0">
+                          Chat &rarr;
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-slate-100 mt-2">
+              <button
+                type="button"
+                onClick={() => setShowNewChatModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-600 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================
+          MODAL: ADD GROUP MEMBER MODAL
+          =================================================================== */}
+      {showAddMemberModal && activeChat && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-md w-full p-6 shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4 shrink-0">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-[#3390ec]" /> Add Member to &quot;{activeChat.name}&quot;
+              </h3>
+              <button
+                onClick={() => setShowAddMemberModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Custom Phone Number input */}
+            <div className="space-y-3 mb-4 pb-4 border-b border-slate-100 shrink-0">
+              <label className="text-xs text-slate-500 block font-medium">
+                Enter phone number to add:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="tel"
+                  placeholder="e.g. 2348012345678"
+                  value={newMemberPhone}
+                  onChange={(e) => setNewMemberPhone(e.target.value)}
+                  className="flex-1 bg-[#f4f6f8] border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#3390ec]"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleAddMember(newMemberPhone)}
+                  disabled={!newMemberPhone.trim() || isAddingMember}
+                  className="px-4 py-2 rounded-xl bg-[#3390ec] hover:bg-[#267fd9] disabled:opacity-50 text-xs font-semibold text-white transition shadow-sm shrink-0"
+                >
+                  {isAddingMember ? "Adding..." : "Add"}
+                </button>
+              </div>
+            </div>
+
+            {/* Select from Contacts */}
+            <div className="flex-1 flex flex-col min-h-0">
+              <span className="text-xs font-semibold text-slate-600 mb-2">
+                Or pick from contacts ({contacts.length}):
+              </span>
+              <div className="flex-1 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
+                {contacts.map((contact, cIdx) => {
+                  const formatted = contact.phoneNumber ? cleanPhoneWasm(contact.phoneNumber) : undefined;
+                  const cName = contact.pushName || contact.name || formatted || "~";
+                  const isAlreadyMember = activeChat.participants?.some(
+                    (p) => p.jid === contact.jid || (formatted && p.phoneNumber === contact.phoneNumber)
+                  );
+
+                  return (
+                    <div
+                      key={`add-${contact.jid}-${cIdx}`}
+                      onClick={() => !isAlreadyMember && handleAddMember(contact.jid)}
+                      className={`flex items-center justify-between p-2 rounded-xl transition ${
+                        isAlreadyMember
+                          ? "opacity-50 cursor-not-allowed bg-slate-50"
+                          : "hover:bg-slate-100 cursor-pointer"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <Avatar name={cName} size="sm" />
+                        <div className="min-w-0">
+                          <span className="text-xs font-semibold text-slate-800 block truncate">
+                            {cName}
+                          </span>
+                          {formatted && (
+                            <span className="text-[10px] text-slate-400 block truncate font-mono">
+                              {formatted}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <span className={`text-[11px] font-semibold shrink-0 ${isAlreadyMember ? "text-slate-400" : "text-[#3390ec]"}`}>
+                        {isAlreadyMember ? "Member" : "Add +"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-slate-100 mt-2">
+              <button
+                type="button"
+                onClick={() => setShowAddMemberModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-600 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================
+          MODAL: CREATE POLL MODAL
+          =================================================================== */}
+      {showPollModal && activeChat && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <BarChart2 className="w-5 h-5 text-amber-500" /> Create a Poll
+              </h3>
+              <button
+                onClick={() => setShowPollModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendPoll} className="space-y-4">
+              <div>
+                <label className="text-xs text-slate-600 block mb-1 font-semibold">
+                  Poll Question:
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ask a question..."
+                  value={pollQuestion}
+                  onChange={(e) => setPollQuestion(e.target.value)}
+                  className="w-full bg-[#f4f6f8] border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#3390ec]"
                   autoFocus
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div>
+                <label className="text-xs text-slate-600 block mb-1 font-semibold">
+                  Options:
+                </label>
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {pollOptions.map((opt, idx) => (
+                    <div key={`opt-${idx}`} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder={`Option ${idx + 1}`}
+                        value={opt}
+                        onChange={(e) => {
+                          const next = [...pollOptions];
+                          next[idx] = e.target.value;
+                          setPollOptions(next);
+                        }}
+                        className="flex-1 bg-[#f4f6f8] border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#3390ec]"
+                      />
+                      {pollOptions.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => setPollOptions((prev) => prev.filter((_, i) => i !== idx))}
+                          className="p-1 text-slate-400 hover:text-red-500 rounded"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {pollOptions.length < 10 && (
+                  <button
+                    type="button"
+                    onClick={() => setPollOptions((prev) => [...prev, ""])}
+                    className="mt-2 text-xs text-[#3390ec] font-semibold hover:underline flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Add option
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="allowMultiple"
+                  checked={pollAllowMultiple}
+                  onChange={(e) => setPollAllowMultiple(e.target.checked)}
+                  className="rounded text-[#3390ec] focus:ring-[#3390ec]"
+                />
+                <label htmlFor="allowMultiple" className="text-xs text-slate-600 font-medium select-none cursor-pointer">
+                  Allow multiple answers
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowNewChatModal(false)}
+                  onClick={() => setShowPollModal(false)}
                   className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-600 transition"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={!newChatNumber.trim()}
-                  className="px-4 py-2 rounded-xl bg-[#3390ec] hover:bg-[#267fd9] disabled:opacity-50 text-xs font-semibold text-white transition shadow-sm"
+                  disabled={!pollQuestion.trim() || isSending}
+                  className="px-5 py-2 rounded-xl bg-[#3390ec] hover:bg-[#267fd9] disabled:opacity-50 text-xs font-semibold text-white transition shadow-sm"
                 >
-                  Open Chat
+                  {isSending ? "Creating..." : "Create Poll"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================
+          MODAL: CREATE EVENT MODAL
+          =================================================================== */}
+      {showEventModal && activeChat && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-indigo-500" /> Create WhatsApp Event
+              </h3>
+              <button
+                onClick={() => setShowEventModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendEvent} className="space-y-3.5">
+              <div>
+                <label className="text-xs text-slate-600 block mb-1 font-semibold">
+                  Event Name:
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Weekly Strategy Sync"
+                  value={eventName}
+                  onChange={(e) => setEventName(e.target.value)}
+                  className="w-full bg-[#f4f6f8] border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#3390ec]"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-600 block mb-1 font-semibold">
+                  Date & Time:
+                </label>
+                <input
+                  type="datetime-local"
+                  value={eventDateTime}
+                  onChange={(e) => setEventDateTime(e.target.value)}
+                  className="w-full bg-[#f4f6f8] border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-800 focus:outline-none focus:border-[#3390ec]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-600 block mb-1 font-semibold">
+                  Location (optional):
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Google Meet or Conference Room A"
+                  value={eventLocation}
+                  onChange={(e) => setEventLocation(e.target.value)}
+                  className="w-full bg-[#f4f6f8] border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#3390ec]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-600 block mb-1 font-semibold">
+                  Description (optional):
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Add details about the event..."
+                  value={eventDesc}
+                  onChange={(e) => setEventDesc(e.target.value)}
+                  className="w-full bg-[#f4f6f8] border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#3390ec] resize-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowEventModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-600 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!eventName.trim() || isSending}
+                  className="px-5 py-2 rounded-xl bg-[#3390ec] hover:bg-[#267fd9] disabled:opacity-50 text-xs font-semibold text-white transition shadow-sm"
+                >
+                  {isSending ? "Creating..." : "Create Event"}
                 </button>
               </div>
             </form>

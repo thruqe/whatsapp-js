@@ -69,6 +69,27 @@ export interface StatusBroadcast {
   media?: MediaMessageInfo;
 }
 
+export interface PollOptionInfo {
+  name: string;
+  votesCount?: number;
+}
+
+export interface PollMessageInfo {
+  name: string;
+  options: PollOptionInfo[];
+  selectableCount?: number;
+  selectableOptionsCount?: number;
+}
+
+export interface EventMessageInfo {
+  name: string;
+  description?: string;
+  startTime?: number;
+  endTime?: number;
+  locationName?: string;
+  isCanceled?: boolean;
+}
+
 export interface ChatThread {
   jid: string;
   name: string;
@@ -89,6 +110,11 @@ export interface ChatThread {
   isPinned?: boolean;
   isArchived?: boolean;
   isBlocked?: boolean;
+  isMuted?: boolean;
+  phoneNumber?: string;
+  parentGroupJid?: string;
+  isParentGroup?: boolean;
+  subgroupsCount?: number;
 }
 
 export interface ChatMessage {
@@ -104,6 +130,13 @@ export interface ChatMessage {
   media?: MediaMessageInfo;
   replyTo?: QuotedMessageInfo;
   reaction?: string;
+  isEdited?: boolean;
+  poll?: PollMessageInfo;
+  event?: EventMessageInfo;
+  call?: {
+    isVideo?: boolean;
+    status?: string;
+  };
 }
 
 export interface SendMessagePayload {

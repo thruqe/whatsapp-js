@@ -13,6 +13,8 @@ import {
   extractIncomingText,
   extractMediaInfo,
   extractQuotedInfo,
+  extractPollInfo,
+  extractEventInfo,
   formatJidToPhone,
   formatPhoneNumber,
   normalizeTargetJid,
@@ -113,6 +115,24 @@ export class WhatsAppClientManager {
     });
 
     client.on("message", (event) => {
+      // 1. Check for incoming edited message (MESSAGE_EDIT protocol message)
+      const protocolMessage = event.message?.protocolMessage;
+      if (
+        protocolMessage &&
+        (protocolMessage.type === 14 || (protocolMessage as any).type === "MESSAGE_EDIT") &&
+        protocolMessage.key?.id
+      ) {
+        const targetMsgId = protocolMessage.key.id;
+        const newText =
+          (protocolMessage.editedMessage
+            ? extractIncomingText(protocolMessage.editedMessage)
+            : undefined) || "";
+        if (newText) {
+          eventBus.updateMessage(targetMsgId, newText, true);
+          return;
+        }
+      }
+
       const msgId = event.key.id ?? Math.random().toString(36).slice(2);
       const text = extractIncomingText(event.message);
       const media = extractMediaInfo(event.message, msgId);
@@ -143,21 +163,54 @@ export class WhatsAppClientManager {
         return;
       }
 
-      if (text || media) {
+      const poll = extractPollInfo(event.message);
+      const eventInfo = extractEventInfo(event.message);
+
+      if (text || media || poll || eventInfo) {
         const msg: ChatMessage = {
           id: msgId,
           chatJid: remoteJid,
           senderJid,
           senderName,
           fromMe: Boolean(event.key.fromMe),
-          text: text || media?.caption || (media ? `${media.type}` : ""),
+          text: text || media?.caption || (media ? `${media.type}` : poll ? `📊 Poll: ${poll.name}` : eventInfo ? `📅 Event: ${eventInfo.name}` : ""),
           timestamp: (event.timestampSeconds ?? Math.floor(Date.now() / 1000)) * 1000,
           isGroup,
           media,
           replyTo,
+          poll,
+          event: eventInfo,
         };
         eventBus.pushMessage(msg);
       }
+    });
+
+    client.on("call" as any, (event: any) => {
+      const fromJid = event.callerPnJid || event.callCreatorJid || event.senderLidJid;
+      if (!fromJid) return;
+      const cleanJid = normalizeTargetJid(fromJid);
+      const contact = eventBus.getContact(cleanJid);
+      const senderName =
+        event.callerPushName ||
+        contact?.displayName ||
+        contact?.pushName ||
+        formatPhoneNumber(cleanJid.split("@")[0]);
+
+      const msg: ChatMessage = {
+        id: event.callId || Math.random().toString(36).slice(2),
+        chatJid: cleanJid,
+        senderJid: cleanJid,
+        senderName,
+        fromMe: false,
+        text: event.isVideo ? "📹 Video Call" : "📞 Voice Call",
+        timestamp: (event.timestampSeconds ?? Math.floor(Date.now() / 1000)) * 1000,
+        isGroup: Boolean(event.groupJid),
+        call: {
+          isVideo: Boolean(event.isVideo),
+          status: "missed",
+        },
+      };
+      eventBus.pushMessage(msg);
     });
 
     client.on("presence" as any, (event: any) => {
@@ -464,6 +517,8 @@ export class WhatsAppClientManager {
             creation: creationTimestamp,
             restrict: g.restrict,
             announce: g.announce,
+            parentGroupJid: (g as any).linkedParentJid || (g as any).parentGroupJid || undefined,
+            isParentGroup: Boolean((g as any).isParentGroup),
           });
 
           // Fetch group avatar in background
@@ -514,6 +569,185 @@ export class WhatsAppClientManager {
   }
 
   /**
+   * Helper to format raw group metadata participants into clean GroupParticipant models.
+   */
+  private formatGroupParticipants(rawParticipants: any[]): import("./types").GroupParticipant[] {
+    const list: import("./types").GroupParticipant[] = (Array.isArray(rawParticipants) ? rawParticipants : []).map((p: any) => {
+      const rawJid = p.jid || "";
+      const contact = eventBus.getContact(rawJid);
+      const rawPhone =
+        p.phoneNumber ||
+        contact?.phoneNumber ||
+        (!rawJid.endsWith("@lid") ? rawJid.split("@")[0] : undefined);
+      const formattedPhone = rawPhone ? formatPhoneNumber(rawPhone) : undefined;
+
+      const pushName = p.pushName || contact?.pushName || p.displayName || undefined;
+      const displayName = contact?.displayName || pushName;
+      const name = displayName || formattedPhone || "~";
+
+      const isAdmin = Boolean(p.isAdmin || p.type === "admin" || p.admin === "admin");
+      const isSuperAdmin = Boolean(p.isSuperAdmin || p.type === "superadmin" || p.admin === "superadmin");
+
+      return {
+        jid: rawJid,
+        name,
+        pushName,
+        phoneNumber: formattedPhone,
+        type: isSuperAdmin ? "superadmin" : isAdmin ? "admin" : "member",
+        isAdmin,
+        isSuperAdmin,
+      };
+    });
+
+    list.sort((a, b) => {
+      const aIsAdmin = Boolean(a.isSuperAdmin || a.isAdmin || a.type === "admin" || a.type === "superadmin");
+      const bIsAdmin = Boolean(b.isSuperAdmin || b.isAdmin || b.type === "admin" || b.type === "superadmin");
+      if (aIsAdmin && !bIsAdmin) return -1;
+      if (!aIsAdmin && bIsAdmin) return 1;
+
+      const nameA = (a.name || a.pushName || a.phoneNumber || "~").toLowerCase();
+      const nameB = (b.name || b.pushName || b.phoneNumber || "~").toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+
+    return list;
+  }
+
+  /**
+   * Queries metadata for a specific group on-demand to populate participants.
+   */
+  public async fetchGroupMetadata(groupJid: string): Promise<ChatThread | undefined> {
+    if (!this.client || eventBus.getState().state !== "open") return eventBus.getChat(groupJid);
+    try {
+      const meta = await this.client.group.queryGroupMetadata(groupJid);
+      if (meta) {
+        const cleanParticipants = this.formatGroupParticipants(meta.participants as any[]);
+        const existingChat = eventBus.getChat(groupJid);
+        const creationTimestamp = meta.creation ? Number(meta.creation) * 1000 : Date.now();
+
+        eventBus.upsertChat({
+          jid: groupJid,
+          name: meta.subject || existingChat?.name || "WhatsApp Group",
+          isGroup: true,
+          lastMessage: existingChat?.lastMessage || (meta.desc ? meta.desc.slice(0, 80) : "No messages yet"),
+          lastTimestamp: existingChat?.lastTimestamp || creationTimestamp,
+          unreadCount: existingChat?.unreadCount ?? 0,
+          desc: meta.desc || undefined,
+          participantsCount: cleanParticipants.length,
+          participants: cleanParticipants,
+          owner: meta.owner || undefined,
+          creation: creationTimestamp,
+          restrict: meta.restrict,
+          announce: meta.announce,
+          parentGroupJid: (meta as any).linkedParentJid || (meta as any).parentGroupJid || undefined,
+          isParentGroup: Boolean((meta as any).isParentGroup),
+        });
+
+        void this.fetchProfilePicture(groupJid);
+        return eventBus.getChat(groupJid);
+      }
+    } catch (err) {
+      console.error(`[whatsapp] Failed to fetch group metadata for ${groupJid}:`, err);
+    }
+    return eventBus.getChat(groupJid);
+  }
+
+  /**
+   * Loads complete thread history for a single chat directly from the SQLite database.
+   */
+  public async loadChatHistory(chatJid: string): Promise<ChatMessage[]> {
+    try {
+      const { resolve } = await import("node:path");
+      const { existsSync } = await import("node:fs");
+      const dbPath = resolve(process.cwd(), process.env.AUTH_DIR || ".auth", "state.sqlite");
+      if (!existsSync(dbPath)) return eventBus.getMessages(chatJid);
+
+      const { default: Database } = await import("bun:sqlite");
+      const db = new Database(dbPath);
+
+      const hasTable = db.query(
+        "SELECT count(*) as cnt FROM sqlite_master WHERE type='table' AND name = 'mailbox_messages'"
+      ).get() as { cnt: number } | null;
+
+      if (!hasTable || hasTable.cnt < 1) {
+        db.close();
+        return eventBus.getMessages(chatJid);
+      }
+
+      const alias = eventBus.getAlias(chatJid);
+      const queryJids = alias && alias !== chatJid ? [chatJid, alias] : [chatJid];
+      const placeholders = queryJids.map(() => "?").join(",");
+
+      const { proto } = await import("zapo-js");
+      const msgRows = db.query(
+        `SELECT message_id, thread_jid, sender_jid, participant_jid, from_me, timestamp_ms, message_bytes FROM mailbox_messages WHERE thread_jid IN (${placeholders}) ORDER BY timestamp_ms ASC`
+      ).all(...queryJids) as Array<{
+        message_id: string;
+        thread_jid: string;
+        sender_jid: string | null;
+        participant_jid: string | null;
+        from_me: number;
+        timestamp_ms: number;
+        message_bytes: Uint8Array | null;
+      }>;
+
+      const loadedMsgs: ChatMessage[] = [];
+      for (const m of msgRows) {
+        let text = "";
+        let media: import("./types").MediaMessageInfo | undefined = undefined;
+        let replyTo: import("./types").QuotedMessageInfo | undefined = undefined;
+
+        if (m.message_bytes) {
+          try {
+            const decoded = proto.Message.decode(m.message_bytes);
+            text = extractIncomingText(decoded) || "";
+            media = extractMediaInfo(decoded, m.message_id);
+            replyTo = extractQuotedInfo(decoded);
+          } catch {
+            text = "";
+          }
+        }
+        if (!text && !media) continue;
+
+        const isStatus = m.thread_jid === "status@broadcast";
+        const isGroup = m.thread_jid.endsWith("@g.us");
+        const sender = isGroup || isStatus ? m.participant_jid || m.sender_jid || m.thread_jid : m.sender_jid || m.thread_jid;
+        const senderContact = eventBus.getContact(sender);
+
+        const senderName = Boolean(m.from_me)
+          ? "Me"
+          : senderContact?.displayName ||
+            senderContact?.pushName ||
+            (senderContact?.phoneNumber ? formatPhoneNumber(senderContact.phoneNumber) : formatJidToPhone(sender));
+
+        const msg: ChatMessage = {
+          id: m.message_id,
+          chatJid: chatJid,
+          senderJid: sender,
+          senderName,
+          fromMe: Boolean(m.from_me),
+          text: text || media?.caption || (media ? `${media.type}` : ""),
+          timestamp: m.timestamp_ms || Date.now(),
+          isGroup,
+          media,
+          replyTo,
+        };
+        loadedMsgs.push(msg);
+      }
+
+      db.close();
+
+      if (loadedMsgs.length > 0) {
+        eventBus.loadMessagesBatch(loadedMsgs);
+      }
+      return eventBus.getMessages(chatJid);
+    } catch (err) {
+      console.error(`[whatsapp] Failed to load chat history for ${chatJid}:`, err);
+      return eventBus.getMessages(chatJid);
+    }
+  }
+
+  /**
    * Sends a message to a contact or group chat.
    */
   public async sendMessage(
@@ -524,15 +758,15 @@ export class WhatsAppClientManager {
     const client = await this.init();
     const targetJid = normalizeTargetJid(to);
 
-    let sendOptions: any = undefined;
+    const sendOptions: any = {};
     if (quotedMessage) {
-      sendOptions = {
-        contextInfo: {
-          stanzaId: quotedMessage.id,
-          participant: quotedMessage.senderJid,
-          quotedMessage: {
-            conversation: quotedMessage.text,
-          },
+      sendOptions.quote = {
+        id: quotedMessage.id,
+        remoteJid: quotedMessage.chatJid,
+        participant: quotedMessage.senderJid,
+        fromMe: quotedMessage.fromMe,
+        message: {
+          conversation: quotedMessage.text,
         },
       };
     }
@@ -561,6 +795,79 @@ export class WhatsAppClientManager {
     };
     eventBus.pushMessage(msg);
 
+    return result;
+  }
+
+  /**
+   * Sends media message (image, video, audio, document) from buffer/file.
+   */
+  public async sendMediaMessage(
+    to: string,
+    fileBuffer: Buffer,
+    mediaType: "image" | "video" | "audio" | "document",
+    mimetype: string,
+    caption?: string,
+    fileName?: string
+  ): Promise<unknown> {
+    const client = await this.init();
+    const targetJid = normalizeTargetJid(to);
+
+    const mediaPayload: any = {
+      type: mediaType,
+      media: fileBuffer,
+      mimetype,
+      caption: caption || undefined,
+      fileName: fileName || undefined,
+    };
+
+    const result = await client.message.send(targetJid, mediaPayload);
+
+    const isGroup = targetJid.endsWith("@g.us");
+    const msg: ChatMessage = {
+      id: Math.random().toString(36).slice(2),
+      chatJid: targetJid,
+      senderJid: this.meJid ?? "me",
+      senderName: this.myPushName || "Me",
+      fromMe: true,
+      text: caption || `[${mediaType}]`,
+      timestamp: Date.now(),
+      isGroup,
+      media: {
+        type: mediaType,
+        mimetype,
+        caption,
+        fileName,
+        thumbnailBase64:
+          mediaType === "image" && fileBuffer.length < 500000
+            ? fileBuffer.toString("base64")
+            : undefined,
+      },
+    };
+    eventBus.pushMessage(msg);
+
+    return result;
+  }
+
+  /**
+   * Edits a previously sent message.
+   */
+  public async editMessage(
+    chatJid: string,
+    messageId: string,
+    newText: string
+  ): Promise<unknown> {
+    const client = await this.init();
+    const targetJid = normalizeTargetJid(chatJid);
+
+    const result = await client.message.send(targetJid, newText, {
+      editKey: {
+        id: messageId,
+        remoteJid: targetJid,
+        fromMe: true,
+      } as any,
+    });
+
+    eventBus.updateMessage(messageId, newText, true);
     return result;
   }
 
@@ -621,6 +928,168 @@ export class WhatsAppClientManager {
         // Ignored
       }
     }
+  }
+
+  /**
+   * Mute or unmute a chat.
+   */
+  public async muteChat(chatJid: string, muted: boolean): Promise<void> {
+    eventBus.setChatMuted(chatJid, muted);
+  }
+
+  /**
+   * Sends a poll creation message.
+   */
+  public async sendPoll(
+    to: string,
+    name: string,
+    options: string[],
+    selectableCount = 1
+  ): Promise<unknown> {
+    const client = await this.init();
+    const targetJid = normalizeTargetJid(to);
+
+    const result = await client.message.send(targetJid, {
+      type: "poll",
+      name,
+      options,
+      selectableCount,
+    });
+
+    const isGroup = targetJid.endsWith("@g.us");
+    const msg: ChatMessage = {
+      id: Math.random().toString(36).slice(2),
+      chatJid: targetJid,
+      senderJid: this.meJid ?? "me",
+      senderName: this.myPushName || "Me",
+      fromMe: true,
+      text: `📊 Poll: ${name}`,
+      timestamp: Date.now(),
+      isGroup,
+      poll: {
+        name,
+        options: options.map((opt) => ({ name: opt, votesCount: 0 })),
+        selectableCount,
+      },
+    };
+    eventBus.pushMessage(msg);
+
+    return result;
+  }
+
+  /**
+   * Sends an event message.
+   */
+  public async sendEvent(
+    to: string,
+    name: string,
+    description?: string,
+    startTime?: number,
+    locationName?: string
+  ): Promise<unknown> {
+    const client = await this.init();
+    const targetJid = normalizeTargetJid(to);
+    const startSec = Math.floor((startTime || Date.now() + 3600000) / 1000);
+
+    const result = await client.message.send(targetJid, {
+      type: "event",
+      name,
+      description,
+      startTime: startSec,
+      location: locationName
+        ? { latitude: 0, longitude: 0, name: locationName }
+        : undefined,
+    });
+
+    const isGroup = targetJid.endsWith("@g.us");
+    const msg: ChatMessage = {
+      id: Math.random().toString(36).slice(2),
+      chatJid: targetJid,
+      senderJid: this.meJid ?? "me",
+      senderName: this.myPushName || "Me",
+      fromMe: true,
+      text: `📅 Event: ${name}`,
+      timestamp: Date.now(),
+      isGroup,
+      event: {
+        name,
+        description,
+        startTime: startSec * 1000,
+        locationName,
+      },
+    };
+    eventBus.pushMessage(msg);
+
+    return result;
+  }
+
+  /**
+   * Sends a reaction to a message.
+   */
+  public async sendReaction(
+    chatJid: string,
+    messageId: string,
+    emoji: string,
+    fromMe: boolean
+  ): Promise<unknown> {
+    const client = await this.init();
+    const targetJid = normalizeTargetJid(chatJid);
+
+    const result = await client.message.send(targetJid, {
+      type: "reaction",
+      emoji,
+      target: {
+        id: messageId,
+        fromMe,
+        remoteJid: targetJid,
+      },
+    });
+
+    // Update in memory
+    const existing = eventBus.getMessages(targetJid).find((m) => m.id === messageId);
+    if (existing) {
+      existing.reaction = emoji;
+      eventBus.updateMessage(messageId, existing.text, Boolean(existing.isEdited));
+    }
+
+    return result;
+  }
+
+  /**
+   * Admin actions: Add participant to group.
+   */
+  public async addGroupParticipant(groupJid: string, participantJid: string): Promise<void> {
+    if (!this.client) throw new Error("Client not initialized");
+    const cleanJid = normalizeTargetJid(participantJid);
+    await this.client.group.addParticipants(groupJid, [cleanJid]);
+    await this.fetchGroupMetadata(groupJid);
+  }
+
+  /**
+   * Admin actions: Remove participant from group.
+   */
+  public async removeGroupParticipant(groupJid: string, participantJid: string): Promise<void> {
+    if (!this.client) throw new Error("Client not initialized");
+    await this.client.group.removeParticipants(groupJid, [participantJid]);
+    await this.fetchGroupMetadata(groupJid);
+  }
+
+  /**
+   * Admin actions: Promote participant to admin.
+   */
+  public async promoteParticipant(groupJid: string, participantJid: string): Promise<void> {
+    if (!this.client) throw new Error("Client not initialized");
+    await this.client.group.promoteParticipants(groupJid, [participantJid]);
+    await this.fetchGroupMetadata(groupJid);
+  }
+
+  /**
+   * Admin actions: Demote admin to member.
+   */
+  public async demoteParticipant(groupJid: string, participantJid: string): Promise<void> {
+    if (!this.client) throw new Error("Client not initialized");
+    await this.client.group.demoteParticipants(groupJid, [participantJid]);
+    await this.fetchGroupMetadata(groupJid);
   }
 
   /**

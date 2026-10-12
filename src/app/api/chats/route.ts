@@ -11,6 +11,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, avatarUrl: url });
   }
 
+  const contactsQuery = req.nextUrl.searchParams.get("contacts");
+  if (contactsQuery === "true") {
+    const contacts = eventBus.getAllContacts();
+    return NextResponse.json({ success: true, contacts });
+  }
+
   if (sync === "true") {
     await whatsappManager.syncGroups().catch(() => undefined);
   }
@@ -38,6 +44,11 @@ export async function POST(req: NextRequest) {
 
     if (!jid) {
       return NextResponse.json({ success: false, error: "Missing jid" }, { status: 400 });
+    }
+
+    if (action === "group_metadata") {
+      const chat = await whatsappManager.fetchGroupMetadata(jid);
+      return NextResponse.json({ success: true, chat });
     }
 
     if (action === "subscribe_presence") {
@@ -85,9 +96,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, isBlocked: true });
     }
 
-    if (action === "unblock") {
-      await whatsappManager.unblockContact(jid);
-      return NextResponse.json({ success: true, isBlocked: false });
+    if (action === "mute") {
+      await whatsappManager.muteChat(jid, Boolean(body.muted));
+      return NextResponse.json({ success: true, isMuted: Boolean(body.muted) });
+    }
+
+    if (action === "add_participant") {
+      await whatsappManager.addGroupParticipant(jid, body.participantJid);
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "remove_participant") {
+      await whatsappManager.removeGroupParticipant(jid, body.participantJid);
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "promote_participant") {
+      await whatsappManager.promoteParticipant(jid, body.participantJid);
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "demote_participant") {
+      await whatsappManager.demoteParticipant(jid, body.participantJid);
+      return NextResponse.json({ success: true });
     }
 
     if (action === "new") {
