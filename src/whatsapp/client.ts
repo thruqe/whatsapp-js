@@ -367,6 +367,11 @@ export class WhatsAppClientManager {
           contact?.pushName ||
           (contact?.phoneNumber ? formatPhoneNumber(contact.phoneNumber) : isGroup ? "Group Chat" : formatJidToPhone(m.thread_jid));
 
+        // For 1-on-1 chats stored under LID, establish bidirectional alias with phone number
+        if (!isGroup && !isStatus && m.thread_jid.endsWith("@lid") && contact?.phoneNumber) {
+          eventBus.registerAlias(m.thread_jid, contact.phoneNumber);
+        }
+
         const msg: ChatMessage = {
           id: m.message_id,
           chatJid: m.thread_jid,
@@ -381,12 +386,26 @@ export class WhatsAppClientManager {
         };
         historyMsgs.push(msg);
 
-        threadsMap.set(m.thread_jid, {
+        // Also push to contact's phone JID if known so thread exists under both
+        const canonicalThreadJid = (!isGroup && !isStatus && m.thread_jid.endsWith("@lid") && contact?.phoneNumber)
+          ? contact.phoneNumber
+          : m.thread_jid;
+
+        threadsMap.set(canonicalThreadJid, {
           lastText: text || media?.caption || (media ? `${media.type}` : "Message"),
           lastTimestamp: m.timestamp_ms || Date.now(),
           isGroup,
           name: chatName,
         });
+
+        if (canonicalThreadJid !== m.thread_jid) {
+          threadsMap.set(m.thread_jid, {
+            lastText: text || media?.caption || (media ? `${media.type}` : "Message"),
+            lastTimestamp: m.timestamp_ms || Date.now(),
+            isGroup,
+            name: chatName,
+          });
+        }
       }
 
       // Load batch into eventBus
@@ -674,8 +693,39 @@ export class WhatsAppClientManager {
         return eventBus.getMessages(chatJid);
       }
 
+      const queryJidSet = new Set<string>([chatJid]);
       const alias = eventBus.getAlias(chatJid);
-      const queryJids = alias && alias !== chatJid ? [chatJid, alias] : [chatJid];
+      if (alias) queryJidSet.add(alias);
+
+      // Check SQLite contacts for matching phone number or LID
+      const digits = chatJid.replace(/\D/g, "");
+      if (digits.length >= 7) {
+        queryJidSet.add(`${digits}@s.whatsapp.net`);
+        try {
+          const contactMatches = db.query(
+            "SELECT jid, phone_number, lid FROM mailbox_contacts WHERE phone_number LIKE ? OR jid LIKE ?"
+          ).all(`%${digits}%`, `%${digits}%`) as Array<{ jid: string; phone_number: string | null; lid: string | null }>;
+
+          for (const match of contactMatches) {
+            if (match.jid) {
+              queryJidSet.add(match.jid);
+              eventBus.registerAlias(chatJid, match.jid);
+            }
+            if (match.phone_number) {
+              queryJidSet.add(match.phone_number);
+              eventBus.registerAlias(chatJid, match.phone_number);
+            }
+            if (match.lid) {
+              queryJidSet.add(match.lid);
+              eventBus.registerAlias(chatJid, match.lid);
+            }
+          }
+        } catch {
+          // Ignore query error
+        }
+      }
+
+      const queryJids = Array.from(queryJidSet);
       const placeholders = queryJids.map(() => "?").join(",");
 
       const { proto } = await import("zapo-js");
@@ -760,13 +810,29 @@ export class WhatsAppClientManager {
 
     const sendOptions: any = {};
     if (quotedMessage) {
+      const isGroup = targetJid.endsWith("@g.us");
+      const participantJid = isGroup
+        ? normalizeTargetJid(quotedMessage.senderJid || quotedMessage.chatJid)
+        : quotedMessage.fromMe
+        ? (this.meJid || undefined)
+        : normalizeTargetJid(quotedMessage.senderJid || targetJid);
+
       sendOptions.quote = {
         id: quotedMessage.id,
-        remoteJid: quotedMessage.chatJid,
-        participant: quotedMessage.senderJid,
-        fromMe: quotedMessage.fromMe,
+        remoteJid: normalizeTargetJid(quotedMessage.chatJid || targetJid),
+        participant: participantJid,
+        fromMe: Boolean(quotedMessage.fromMe),
         message: {
-          conversation: quotedMessage.text,
+          conversation: quotedMessage.text || "",
+        },
+      };
+
+      // Also explicitly provide contextInfo to guarantee wire encoding across all clients
+      sendOptions.contextInfo = {
+        quotedMessageId: quotedMessage.id,
+        quotedParticipant: participantJid,
+        quotedMessage: {
+          conversation: quotedMessage.text || "",
         },
       };
     }
@@ -1053,6 +1119,34 @@ export class WhatsAppClientManager {
     }
 
     return result;
+  }
+
+  /**
+   * Creates a new WhatsApp group chat.
+   */
+  public async createGroup(subject: string, participants: string[]): Promise<ChatThread> {
+    const client = await this.init();
+    const cleanParticipants = participants
+      .map((p) => normalizeTargetJid(p))
+      .filter((p) => p && p !== this.meJid && !p.endsWith("@g.us"));
+
+    const metadata = await client.group.createGroup(subject.trim(), cleanParticipants);
+    const groupJid = metadata.jid;
+
+    const chat = await this.fetchGroupMetadata(groupJid);
+    if (chat) return chat;
+
+    const newChat: ChatThread = {
+      jid: groupJid,
+      name: subject.trim(),
+      isGroup: true,
+      lastMessage: "Group created",
+      lastTimestamp: Date.now(),
+      unreadCount: 0,
+      participantsCount: cleanParticipants.length + 1,
+    };
+    eventBus.upsertChat(newChat);
+    return newChat;
   }
 
   /**

@@ -42,6 +42,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, chats: whatsappManager.getChats() });
     }
 
+    if (action === "create_group") {
+      const { name: subject, participants } = body;
+      if (!subject || !subject.trim()) {
+        return NextResponse.json({ success: false, error: "Group name is required" }, { status: 400 });
+      }
+      if (!Array.isArray(participants) || participants.length === 0) {
+        return NextResponse.json({ success: false, error: "At least one participant is required" }, { status: 400 });
+      }
+      const newChat = await whatsappManager.createGroup(subject, participants);
+      return NextResponse.json({ success: true, chat: newChat });
+    }
+
     if (!jid) {
       return NextResponse.json({ success: false, error: "Missing jid" }, { status: 400 });
     }

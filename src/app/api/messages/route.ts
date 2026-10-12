@@ -104,6 +104,50 @@ export async function POST(req: NextRequest) {
     if (quotedId) {
       const chatMessages = eventBus.getMessages(to);
       quotedMessage = chatMessages.find((m) => m.id === quotedId);
+      if (!quotedMessage) {
+        // Search across all loaded messages
+        const all = eventBus.getMessages();
+        quotedMessage = all.find((m) => m.id === quotedId);
+      }
+      if (!quotedMessage) {
+        // Fallback: check SQLite database directly
+        try {
+          const { resolve } = await import("node:path");
+          const { default: Database } = await import("bun:sqlite");
+          const dbPath = resolve(process.cwd(), process.env.AUTH_DIR || ".auth", "state.sqlite");
+          const db = new Database(dbPath);
+          const row = db.query(
+            "SELECT message_id, thread_jid, sender_jid, participant_jid, from_me, timestamp_ms, message_bytes FROM mailbox_messages WHERE message_id = ? LIMIT 1"
+          ).get(quotedId) as any;
+          if (row) {
+            const { proto } = await import("zapo-js");
+            const { extractIncomingText, extractMediaInfo } = await import("@/whatsapp/helpers");
+            let qText = "";
+            let qMedia = undefined;
+            if (row.message_bytes) {
+              try {
+                const dec = proto.Message.decode(row.message_bytes);
+                qText = extractIncomingText(dec) || "";
+                qMedia = extractMediaInfo(dec, row.message_id);
+              } catch {}
+            }
+            const isGroup = row.thread_jid?.endsWith("@g.us");
+            const sender = isGroup ? row.participant_jid || row.sender_jid || row.thread_jid : row.sender_jid || row.thread_jid;
+            quotedMessage = {
+              id: row.message_id,
+              chatJid: row.thread_jid,
+              senderJid: sender,
+              senderName: row.from_me ? "Me" : sender,
+              fromMe: Boolean(row.from_me),
+              text: qText || (qMedia ? `${qMedia.type}` : ""),
+              timestamp: row.timestamp_ms || Date.now(),
+              isGroup,
+              media: qMedia,
+            };
+          }
+          db.close();
+        } catch {}
+      }
     }
 
     const result = await whatsappManager.sendMessage(to, text, quotedMessage);
